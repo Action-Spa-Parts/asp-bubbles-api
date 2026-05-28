@@ -12,6 +12,10 @@
 import express from 'express';
 import cors from 'cors';
 import pg from 'pg';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const { Pool } = pg;
 
@@ -431,8 +435,19 @@ app.use(cors({ origin: true }));
 // Accept any content-type and parse manually.
 app.use(express.text({ type: '*/*', limit: '64kb' }));
 
-app.get('/', (req, res) => {
-  res.json({ ok: true, app: 'asp-bubbles-api' });
+// Serve the PWA from public/ — same origin as the API, so no CORS at all.
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, filePath) => {
+    // index.html and sw.js shouldn't be cached by browsers — users always get
+    // the latest version on next load.
+    if (filePath.endsWith('index.html') || filePath.endsWith('sw.js')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    }
+  },
+}));
+
+app.get('/health', (req, res) => {
+  res.json({ ok: true, app: 'asp-bubbles' });
 });
 
 app.post('/', async (req, res) => {
