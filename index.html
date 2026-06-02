@@ -469,6 +469,50 @@
   /* leave room for the fixed bottom nav */
   body { padding-bottom: 70px; }
 
+  /* Admin (Manage) modal */
+  .admin-tabs { display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--border); }
+  .atab {
+    background:none; border:none; border-bottom:2px solid transparent;
+    padding:9px 12px; font:inherit; font-weight:600; font-size:13px;
+    color:var(--muted); cursor:pointer; border-radius:0;
+  }
+  .atab.active { color:var(--accent); border-bottom-color:var(--accent); }
+  .asec[hidden] { display:none; }
+  .admin-add-btn { margin-bottom:14px; padding:9px 14px; }
+  .admin-form {
+    background:#faf9f6; border:1px solid var(--border); border-radius:10px;
+    padding:16px; margin-bottom:18px;
+  }
+  .admin-form .ftitle { font-weight:600; font-size:14px; margin-bottom:12px; }
+  .admin-form .field { display:flex; flex-direction:column; gap:5px; margin-bottom:11px; }
+  .admin-form .field label { font-size:12px; color:var(--muted); font-weight:500; }
+  .admin-form .field input { width:100%; min-width:0; }
+  .admin-form .row2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .admin-form .checkrow { display:flex; align-items:center; gap:9px; margin:4px 0 12px; }
+  .admin-form .checkrow input { width:auto; min-width:0; }
+  .admin-form .checkrow label { font-size:13px; color:var(--text); }
+  .admin-form .formbtns { display:flex; gap:8px; justify-content:flex-end; }
+  .alist { display:flex; flex-direction:column; gap:8px; }
+  .arow {
+    display:flex; justify-content:space-between; align-items:center; gap:12px;
+    background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:11px 14px;
+  }
+  .arow.inactive { opacity:0.55; }
+  .arow .ainfo { min-width:0; }
+  .arow .atitle { font-weight:600; font-size:14px; }
+  .arow .asub { color:var(--muted); font-size:12px; margin-top:2px; word-break:break-word; }
+  .arow .aval { font-weight:700; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .arow .aval.neg { color:var(--danger); }
+  .arow .aright { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+  .arow .aactions { display:flex; gap:6px; flex-shrink:0; }
+  .arow .aactions button { padding:5px 10px; font-size:12px; border-radius:6px; }
+  .badge {
+    font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+    padding:2px 7px; border-radius:99px; background:var(--accent-soft); color:var(--accent); margin-left:6px;
+    vertical-align:middle;
+  }
+  .badge.off { background:#f0efeb; color:var(--muted); }
+
   /* Phone layout */
   @media (max-width: 600px) {
     .wrap { padding: 16px 12px 48px; }
@@ -539,6 +583,7 @@
 
   <section class="panel toolbar">
     <button class="ghost" id="refreshBtn">Refresh</button>
+    <button class="ghost" id="manageBtn" hidden>⚙ Manage</button>
     <span style="flex:1"></span>
     <span class="muted" id="identity" style="font-size: 14px;"></span>
     <button class="ghost" id="logoutBtn">Log out</button>
@@ -680,6 +725,82 @@
   </div>
 </div>
 
+<!-- ===== Admin / Manage modal (manager only) ===== -->
+<div class="overlay" id="adminModal" hidden style="z-index:110;">
+  <div class="overlay-card" style="width:min(720px,100%);">
+    <div class="dhead">
+      <div class="dname">⚙ Manage</div>
+      <button class="dclose" id="adminClose" aria-label="Close">&times;</button>
+    </div>
+    <div class="dbody">
+      <div class="admin-tabs">
+        <button class="atab active" data-atab="rules">Earn rules</button>
+        <button class="atab" data-atab="rewards">Rewards</button>
+        <button class="atab" data-atab="people">People</button>
+      </div>
+      <div id="adminError" style="display:none; background:var(--danger-soft); border:1px solid #fecaca; color:#7f1d1d; border-radius:8px; padding:8px 12px; font-size:13px; margin-bottom:12px;"></div>
+
+      <!-- Earn rules -->
+      <div class="asec" id="asec-rules">
+        <button class="primary admin-add-btn" id="ruleAddBtn">＋ Add an earn rule</button>
+        <div class="admin-form" id="ruleForm" hidden>
+          <div class="ftitle" id="ruleFormTitle">New earn rule</div>
+          <input type="hidden" id="ruleId">
+          <div class="field"><label>Name (what they did)</label><input type="text" id="ruleMetric" placeholder="e.g. Top picker"></div>
+          <div class="row2">
+            <div class="field"><label>Bubbles (use a minus sign for penalties)</label><input type="number" id="ruleBubbles" step="1" placeholder="10"></div>
+            <div class="field"><label>Category</label><input type="text" id="ruleCategory" placeholder="Productivity"></div>
+          </div>
+          <div class="field"><label>Description (optional)</label><input type="text" id="ruleDesc" placeholder="Short explanation"></div>
+          <div class="checkrow"><input type="checkbox" id="ruleTeam"><label for="ruleTeam">Whole-team rule (appears under “Award whole team”)</label></div>
+          <div class="formbtns">
+            <button class="ghost" id="ruleCancel">Cancel</button>
+            <button class="primary" id="ruleSave">Save</button>
+          </div>
+        </div>
+        <div class="alist" id="ruleAdminList"></div>
+      </div>
+
+      <!-- Rewards -->
+      <div class="asec" id="asec-rewards" hidden>
+        <button class="primary admin-add-btn" id="rewardAddBtn">＋ Add a reward</button>
+        <div class="admin-form" id="rewardForm" hidden>
+          <div class="ftitle" id="rewardFormTitle">New reward</div>
+          <input type="hidden" id="rewardId">
+          <div class="field"><label>Name</label><input type="text" id="rewardName" placeholder="e.g. Coffee"></div>
+          <div class="field"><label>Cost in bubbles</label><input type="number" id="rewardCost" step="1" min="1" placeholder="50"></div>
+          <div class="field"><label>Description (optional)</label><input type="text" id="rewardDesc" placeholder="Short explanation"></div>
+          <div class="formbtns">
+            <button class="ghost" id="rewardCancel">Cancel</button>
+            <button class="primary" id="rewardSave">Save</button>
+          </div>
+        </div>
+        <div class="alist" id="rewardAdminList"></div>
+      </div>
+
+      <!-- People -->
+      <div class="asec" id="asec-people" hidden>
+        <button class="primary admin-add-btn" id="empAddBtn">＋ Add a person</button>
+        <div class="admin-form" id="empForm" hidden>
+          <div class="ftitle" id="empFormTitle">New person</div>
+          <input type="hidden" id="empId">
+          <div class="field"><label>Name</label><input type="text" id="empName" placeholder="e.g. Maria"></div>
+          <div class="row2">
+            <div class="field"><label id="empPinLabel">PIN (4–6 digits, optional)</label><input type="text" inputmode="numeric" id="empPin" placeholder="e.g. 8080" maxlength="6"></div>
+            <div class="field"><label>Starting balance</label><input type="number" id="empStart" step="1" placeholder="0"></div>
+          </div>
+          <div class="field"><label>Email (optional)</label><input type="text" id="empEmail" placeholder="name@example.com"></div>
+          <div class="formbtns">
+            <button class="ghost" id="empCancel">Cancel</button>
+            <button class="primary" id="empSave">Save</button>
+          </div>
+        </div>
+        <div class="alist" id="empAdminList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 
 /* ---------- Backend bridge (Apps Script JSON API) ---------- */
@@ -754,6 +875,7 @@ const state = {
   view: "balances", // balances | rewards | earn
   pendingRedeem: null, // reward awaiting confirm
   pendingTeam: null,   // {metric, amount} awaiting team-award confirm
+  admin: { rules: [], rewards: [], employees: [], tab: "rules" }, // manager admin screens
 };
 
 function normalizeCatalog(rows) {
@@ -810,11 +932,15 @@ function normalizeRules(rows) {
     const category = findField(r, ["Category"]) || "Other";
     const description = findField(r, ["Description", "Notes"]) || "";
     const n = parseFloat(String(bubbles).replace(/,/g, ""));
+    let teamWide = findField(r, ["TeamWide", "team_wide"]);
+    // Fallback for older data without the column: detect the legacy convention.
+    if (teamWide === undefined) teamWide = /whole team/i.test(String(description));
     return {
       metric: String(metric || "").trim(),
       bubbles: isNaN(n) ? 0 : n,
       category: String(category || "Other").trim(),
       description: String(description || "").trim(),
+      teamWide: !!teamWide,
     };
   }).filter(r => r.metric);
 }
@@ -992,7 +1118,7 @@ function renderRewards() {
   // --- Reward cards ---
   const el = $("rewardList");
   if (!state.catalog.length) {
-    el.innerHTML = `<div class="empty"><h3>No rewards</h3><div>Add rewards in the Rewards tab of the Sheet.</div></div>`;
+    el.innerHTML = `<div class="empty"><h3>No rewards</h3><div>Add rewards in ⚙ Manage → Rewards.</div></div>`;
   } else {
     const bal = myBalance();
     el.innerHTML = state.catalog.map((r, i) => {
@@ -1098,7 +1224,7 @@ async function fulfillRequest(row) {
 function renderEarn() {
   const el = $("earnList");
   if (!state.rules.length) {
-    el.innerHTML = `<div class="empty"><h3>No rules</h3><div>Add rules in the Rules tab of the Sheet.</div></div>`;
+    el.innerHTML = `<div class="empty"><h3>No rules</h3><div>Add ways to earn in ⚙ Manage → Earn rules.</div></div>`;
     return;
   }
   const byCat = {};
@@ -1297,10 +1423,10 @@ function openTeamAward() {
   state.pendingTeam = null;
   $("teamConfirm").hidden = true;
   $("teamPick").hidden = false;
-  // Only rules flagged as team-wide (description contains "whole team").
-  const teamRules = state.rules.filter(r => /whole team/i.test(r.description || ""));
+  // Only rules flagged as team-wide (the "Whole-team rule" toggle in Manage).
+  const teamRules = state.rules.filter(r => r.teamWide);
   if (!teamRules.length) {
-    $("teamRules").innerHTML = `<div class="empty"><h3>No team rules</h3><div>Mark a rule as team-wide by adding "whole team" to its description in the Rules tab.</div></div>`;
+    $("teamRules").innerHTML = `<div class="empty"><h3>No team rules</h3><div>Mark a rule as a whole-team rule in ⚙ Manage → Earn rules.</div></div>`;
   } else {
     renderRuleButtons($("teamRules"), (metric, amount) => {
       state.pendingTeam = { metric: metric, amount: amount };
@@ -1503,6 +1629,7 @@ const session = { pin: null, role: null, name: null };
 
 function updateIdentityUi() {
   const el = $("identity");
+  $("manageBtn").hidden = (session.role !== "manager");
   if (session.role === "manager") {
     el.textContent = "Manager";
     return;
@@ -1549,8 +1676,209 @@ function logout() {
   state.employees = [];
   state.log = [];
   $("loginPin").value = "";
+  $("adminModal").hidden = true;
+  $("manageBtn").hidden = true;
   $("loginOverlay").hidden = false;
   document.body.classList.add("pre-auth");
+}
+
+/* ---------- Admin: manage rules / rewards / people (manager only) ---------- */
+
+function adminError(msg) {
+  const el = $("adminError");
+  if (!msg) { el.style.display = "none"; return; }
+  el.textContent = msg;
+  el.style.display = "block";
+}
+
+function hideAdminForms() {
+  $("ruleForm").hidden = true;
+  $("rewardForm").hidden = true;
+  $("empForm").hidden = true;
+}
+
+async function openAdmin() {
+  if (session.role !== "manager") return;
+  adminError("");
+  switchAdminTab("rules");
+  $("adminModal").hidden = false;
+  await loadAdmin();
+}
+
+async function loadAdmin() {
+  try {
+    const data = await apiCall("getAdmin", { pin: session.pin });
+    if (data.error) { adminError(data.error); return; }
+    state.admin.rules = data.rules || [];
+    state.admin.rewards = data.rewards || [];
+    state.admin.employees = data.employees || [];
+    renderAdmin();
+  } catch (err) {
+    adminError("Couldn't load: " + (err && err.message ? err.message : err));
+  }
+}
+
+function switchAdminTab(tab) {
+  state.admin.tab = tab;
+  ["rules", "rewards", "people"].forEach(t => { $("asec-" + t).hidden = (t !== tab); });
+  document.querySelectorAll(".atab").forEach(b => b.classList.toggle("active", b.dataset.atab === tab));
+  adminError("");
+  hideAdminForms();
+}
+
+// Shared save path: posts the action, then refreshes both the admin lists and
+// the main app so changes show everywhere immediately.
+async function adminSave(action, params) {
+  adminError("");
+  try {
+    const res = await apiCall(action, Object.assign({ pin: session.pin }, params));
+    if (res.error) { adminError(res.error); return; }
+    hideAdminForms();
+    await loadAdmin();
+    fetchData();
+  } catch (err) {
+    adminError("Error: " + (err && err.message ? err.message : err));
+  }
+}
+
+function renderAdmin() {
+  renderRuleAdmin();
+  renderRewardAdmin();
+  renderEmpAdmin();
+}
+
+// ----- Rules -----
+function renderRuleAdmin() {
+  const el = $("ruleAdminList");
+  const rules = state.admin.rules;
+  if (!rules.length) { el.innerHTML = `<div class="muted" style="font-size:13px;">No rules yet. Tap “Add an earn rule”.</div>`; return; }
+  el.innerHTML = rules.map(r => {
+    const sign = r.bubbles > 0 ? "+" : "";
+    return `
+      <div class="arow ${r.active ? "" : "inactive"}">
+        <div class="ainfo">
+          <div class="atitle">${escapeHtml(r.metric)}${r.teamWide ? `<span class="badge">Team</span>` : ""}${r.active ? "" : `<span class="badge off">Off</span>`}</div>
+          <div class="asub">${escapeHtml(r.category || "Other")}${r.description ? " · " + escapeHtml(r.description) : ""}</div>
+        </div>
+        <div class="aright">
+          <span class="aval ${r.bubbles < 0 ? "neg" : ""}">${sign}${r.bubbles}</span>
+          <div class="aactions">
+            <button class="ghost" data-edit="${r.id}">Edit</button>
+            <button class="ghost" data-toggle="${r.id}" data-active="${r.active ? 0 : 1}">${r.active ? "Turn off" : "Turn on"}</button>
+          </div>
+        </div>
+      </div>`;
+  }).join("");
+  el.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => editRule(parseInt(b.dataset.edit, 10))));
+  el.querySelectorAll("[data-toggle]").forEach(b => b.addEventListener("click", () => adminSave("setRuleActive", { id: parseInt(b.dataset.toggle, 10), active: b.dataset.active === "1" })));
+}
+
+function showRuleForm(rule) {
+  $("ruleFormTitle").textContent = rule ? "Edit earn rule" : "New earn rule";
+  $("ruleId").value = rule ? rule.id : "";
+  $("ruleMetric").value = rule ? rule.metric : "";
+  $("ruleBubbles").value = rule ? rule.bubbles : "";
+  $("ruleCategory").value = rule ? (rule.category || "") : "";
+  $("ruleDesc").value = rule ? (rule.description || "") : "";
+  $("ruleTeam").checked = rule ? !!rule.teamWide : false;
+  adminError("");
+  $("ruleForm").hidden = false;
+}
+function editRule(id) { const r = state.admin.rules.find(x => x.id === id); if (r) showRuleForm(r); }
+async function saveRule() {
+  const payload = {
+    id: $("ruleId").value || undefined,
+    metric: $("ruleMetric").value,
+    bubbles: $("ruleBubbles").value,
+    category: $("ruleCategory").value,
+    description: $("ruleDesc").value,
+    teamWide: $("ruleTeam").checked,
+  };
+  await adminSave(payload.id ? "updateRule" : "addRule", { rule: payload });
+}
+
+// ----- Rewards -----
+function renderRewardAdmin() {
+  const el = $("rewardAdminList");
+  const rewards = state.admin.rewards;
+  if (!rewards.length) { el.innerHTML = `<div class="muted" style="font-size:13px;">No rewards yet. Tap “Add a reward”.</div>`; return; }
+  el.innerHTML = rewards.map(r => `
+      <div class="arow ${r.active ? "" : "inactive"}">
+        <div class="ainfo">
+          <div class="atitle">${escapeHtml(r.name)}${r.active ? "" : `<span class="badge off">Off</span>`}</div>
+          <div class="asub">${r.description ? escapeHtml(r.description) : ""}</div>
+        </div>
+        <div class="aright">
+          <span class="aval">${Number(r.cost).toLocaleString()}</span>
+          <div class="aactions">
+            <button class="ghost" data-edit="${r.id}">Edit</button>
+            <button class="ghost" data-toggle="${r.id}" data-active="${r.active ? 0 : 1}">${r.active ? "Turn off" : "Turn on"}</button>
+          </div>
+        </div>
+      </div>`).join("");
+  el.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => editReward(parseInt(b.dataset.edit, 10))));
+  el.querySelectorAll("[data-toggle]").forEach(b => b.addEventListener("click", () => adminSave("setRewardActive", { id: parseInt(b.dataset.toggle, 10), active: b.dataset.active === "1" })));
+}
+function showRewardForm(r) {
+  $("rewardFormTitle").textContent = r ? "Edit reward" : "New reward";
+  $("rewardId").value = r ? r.id : "";
+  $("rewardName").value = r ? r.name : "";
+  $("rewardCost").value = r ? r.cost : "";
+  $("rewardDesc").value = r ? (r.description || "") : "";
+  adminError("");
+  $("rewardForm").hidden = false;
+}
+function editReward(id) { const r = state.admin.rewards.find(x => x.id === id); if (r) showRewardForm(r); }
+async function saveReward() {
+  const payload = {
+    id: $("rewardId").value || undefined,
+    name: $("rewardName").value,
+    cost: $("rewardCost").value,
+    description: $("rewardDesc").value,
+  };
+  await adminSave(payload.id ? "updateReward" : "addReward", { reward: payload });
+}
+
+// ----- People -----
+function renderEmpAdmin() {
+  const el = $("empAdminList");
+  const emps = state.admin.employees;
+  if (!emps.length) { el.innerHTML = `<div class="muted" style="font-size:13px;">No people yet. Tap “Add a person”.</div>`; return; }
+  el.innerHTML = emps.map(e => `
+      <div class="arow ${e.active ? "" : "inactive"}">
+        <div class="ainfo">
+          <div class="atitle">${escapeHtml(e.name)}${e.active ? "" : `<span class="badge off">Off</span>`}</div>
+          <div class="asub">PIN ${e.pin ? escapeHtml(e.pin) : "—"} · balance ${Number(e.balance).toLocaleString()}${e.email ? " · " + escapeHtml(e.email) : ""}</div>
+        </div>
+        <div class="aactions">
+          <button class="ghost" data-edit="${e.id}">Edit</button>
+          <button class="ghost" data-toggle="${e.id}" data-active="${e.active ? 0 : 1}">${e.active ? "Deactivate" : "Reactivate"}</button>
+        </div>
+      </div>`).join("");
+  el.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => editEmp(parseInt(b.dataset.edit, 10))));
+  el.querySelectorAll("[data-toggle]").forEach(b => b.addEventListener("click", () => adminSave("setEmployeeActive", { id: parseInt(b.dataset.toggle, 10), active: b.dataset.active === "1" })));
+}
+function showEmpForm(e) {
+  $("empFormTitle").textContent = e ? "Edit person" : "New person";
+  $("empId").value = e ? e.id : "";
+  $("empName").value = e ? e.name : "";
+  $("empPin").value = e ? (e.pin || "") : "";
+  $("empPinLabel").textContent = e ? "PIN (blank = keep current)" : "PIN (4–6 digits, optional)";
+  $("empStart").value = e ? e.startingBalance : "0";
+  $("empEmail").value = e ? (e.email || "") : "";
+  adminError("");
+  $("empForm").hidden = false;
+}
+function editEmp(id) { const e = state.admin.employees.find(x => x.id === id); if (e) showEmpForm(e); }
+async function saveEmp() {
+  const payload = {
+    id: $("empId").value || undefined,
+    name: $("empName").value,
+    pin: $("empPin").value,
+    startingBalance: $("empStart").value,
+    email: $("empEmail").value,
+  };
+  await adminSave(payload.id ? "updateEmployee" : "addEmployee", { employee: payload });
 }
 
 /* ---------- Event wiring ---------- */
@@ -1587,6 +1915,20 @@ $("teamClose").addEventListener("click", () => { $("teamAward").hidden = true; s
 document.querySelectorAll(".navbtn").forEach(btn => {
   btn.addEventListener("click", () => switchView(btn.dataset.view));
 });
+
+// Admin / Manage wiring.
+$("manageBtn").addEventListener("click", openAdmin);
+$("adminClose").addEventListener("click", () => { $("adminModal").hidden = true; });
+document.querySelectorAll(".atab").forEach(b => b.addEventListener("click", () => switchAdminTab(b.dataset.atab)));
+$("ruleAddBtn").addEventListener("click", () => showRuleForm(null));
+$("ruleCancel").addEventListener("click", () => { $("ruleForm").hidden = true; adminError(""); });
+$("ruleSave").addEventListener("click", saveRule);
+$("rewardAddBtn").addEventListener("click", () => showRewardForm(null));
+$("rewardCancel").addEventListener("click", () => { $("rewardForm").hidden = true; adminError(""); });
+$("rewardSave").addEventListener("click", saveReward);
+$("empAddBtn").addEventListener("click", () => showEmpForm(null));
+$("empCancel").addEventListener("click", () => { $("empForm").hidden = true; adminError(""); });
+$("empSave").addEventListener("click", saveEmp);
 
 // Start at the login screen; focus the PIN field. No data loads until login.
 setTimeout(() => $("loginPin").focus(), 100);
