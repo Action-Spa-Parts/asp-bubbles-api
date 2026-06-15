@@ -1528,8 +1528,12 @@ function updateChecklistNav() {
 /* ---------- End-of-day checklist ---------- */
 
 function fmtRunDate(s) {
-  const d = new Date(s);
-  if (isNaN(d)) return s || "";
+  if (!s) return "";
+  // Parse a 'YYYY-MM-DD' string as a LOCAL date. (new Date("YYYY-MM-DD") treats it
+  // as UTC midnight, which displays as the previous day in US timezones.)
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s));
+  const d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(s);
+  if (isNaN(d)) return s;
   return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 }
 

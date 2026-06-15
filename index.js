@@ -141,6 +141,14 @@ async function ensureSchema() {
         ('Building & Security', 'All entry doors locked.', 160)`);
     console.log('Schema: seeded 16 checklist tasks.');
   }
+
+  // Clean up any not-yet-completed runs that landed on a closed day (e.g. a
+  // Sunday run created before this rule existed). Leaves completed history alone.
+  if (CLOSED_DOWS.length) {
+    await pool.query(
+      `DELETE FROM checklist_runs WHERE status = 'pending' AND EXTRACT(DOW FROM run_date)::int = ANY($1)`,
+      [CLOSED_DOWS]);
+  }
 }
 
 // =================================================================
@@ -934,9 +942,13 @@ async function setAdminActive(who, id, active) {
 // End-of-day checklist
 // =================================================================
 
-// "Today" anchored to US Eastern so the date doesn't roll at an awkward local
-// hour (warehouse closes well before midnight ET). Constant — safe to inline.
-const BIZ_DATE = "(now() AT TIME ZONE 'America/New_York')::date";
+// "Today" anchored to US Pacific (PST/PDT) — the warehouse's local day. Constant,
+// safe to inline. To change the warehouse timezone, swap the IANA name here.
+const BIZ_DATE = "(now() AT TIME ZONE 'America/Los_Angeles')::date";
+
+// Days of week with no closing checklist (office closed). 0 = Sunday, 6 = Saturday.
+// Add 6 here to also skip Saturdays.
+const CLOSED_DOWS = [0];
 
 async function nameForEmpId(id) {
   if (id == null) return null;
@@ -955,6 +967,10 @@ async function ensureTodayRun() {
     await client.query('SELECT pg_advisory_xact_lock(76123451)');
     let { rows } = await client.query(`SELECT * FROM checklist_runs WHERE run_date = ${BIZ_DATE}`);
     if (rows.length) { await client.query('COMMIT'); return rows[0]; }
+
+    // Don't create/assign a run on closed days (e.g. Sundays — office closed).
+    const { rows: dowRows } = await client.query(`SELECT EXTRACT(DOW FROM ${BIZ_DATE})::int AS dow`);
+    if (CLOSED_DOWS.includes(dowRows[0].dow)) { await client.query('ROLLBACK'); return null; }
 
     // Avoid assigning the same person two days in a row when possible; otherwise
     // pick whoever has gone the longest ago (never-assigned first), random tiebreak.
