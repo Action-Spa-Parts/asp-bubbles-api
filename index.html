@@ -1655,22 +1655,27 @@ function setStatus(message, kind = "ok") {
   el.style.color = kind === "error" ? "#7f1d1d" : (kind === "warn" ? "#7c2d12" : "#065f46");
 }
 
+// Populate app state from a getData response and re-render.
+function applyData(data) {
+  state.employees = normalizeBalances(data.balances || []);
+  state.rules     = normalizeRules(data.rules || []);
+  state.catalog   = normalizeCatalog(data.rewards || []);
+  state.myTransactions = data.myTransactions || [];
+  state.allAwards = data.allAwards || [];
+  state.myRequests = data.myRequests || [];
+  state.pending    = data.pending || [];
+  state.approved   = data.approved || [];
+  if (data.role) session.role = data.role;
+  if (data.name) session.name = data.name;
+  render();
+}
+
 async function fetchData() {
   try {
     const data = await apiCall("getData", { pin: session.pin });
     if (data.error) throw new Error(data.error);
-    state.employees = normalizeBalances(data.balances || []);
-    state.rules     = normalizeRules(data.rules || []);
-    state.catalog   = normalizeCatalog(data.rewards || []);
-    state.myTransactions = data.myTransactions || [];
-    state.allAwards = data.allAwards || [];
-    state.myRequests = data.myRequests || [];
-    state.pending    = data.pending || [];
-    state.approved   = data.approved || [];
-    if (data.role) session.role = data.role;
-    if (data.name) session.name = data.name;
+    applyData(data);
     setStatus(""); // hide the banner on success — only show on errors
-    render();
   } catch (err) {
     setStatus("Couldn't load data (" + (err && err.message ? err.message : err) + ").", "error");
   }
@@ -1717,6 +1722,37 @@ function enterApp(res) {
   fetchData();
 }
 
+/* ---------- "Stay signed in" for admins ---------- */
+// We persist only the admin session TOKEN (never the password). It's revocable
+// server-side (logout / deactivate kills it) and expires after 30 days.
+const TOKEN_KEY = "aspb_admin_token";
+function saveToken(t)  { try { localStorage.setItem(TOKEN_KEY, t); } catch (e) {} }
+function clearToken()  { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} }
+function storedToken() { try { return localStorage.getItem(TOKEN_KEY); } catch (e) { return null; } }
+
+// On page load: if a saved admin token exists and is still valid, resume the
+// session silently (no login screen). Returns true if resumed.
+async function tryRestoreSession() {
+  const t = storedToken();
+  if (!t) return false;
+  session.token = t;
+  session.pin = null;
+  try {
+    const data = await apiCall("getData", {});   // token auto-attached; validated server-side
+    if (data.error || !data.role) throw new Error(data.error || "expired");
+    applyData(data);                             // sets session.role/name + renders
+    $("loginOverlay").hidden = true;
+    document.body.classList.remove("pre-auth");
+    updateIdentityUi();
+    switchView("balances");
+    return true;
+  } catch (e) {
+    session.token = null;
+    clearToken();
+    return false;
+  }
+}
+
 async function doLogin(pin) {
   pin = String(pin || "").trim();
   if (!pin) { showLoginErr("loginError", "Enter your PIN."); return; }
@@ -1740,6 +1776,7 @@ async function doAdminLogin() {
     if (res.error) { showLoginErr("adminLoginError", res.error); return; }
     session.token = res.token;
     session.pin = null;
+    saveToken(res.token);   // stay signed in across reloads
     enterApp(res);
   } catch (err) {
     showLoginErr("adminLoginError", "Error: " + (err && err.message ? err.message : err));
@@ -1756,6 +1793,7 @@ async function doAdminSignup() {
     if (res.error) { showLoginErr("adminSignupError", res.error); return; }
     session.token = res.token;
     session.pin = null;
+    saveToken(res.token);   // stay signed in across reloads
     enterApp(res);
   } catch (err) {
     showLoginErr("adminSignupError", "Error: " + (err && err.message ? err.message : err));
@@ -1765,6 +1803,7 @@ async function doAdminSignup() {
 function logout() {
   // Best-effort: tell the server to drop this admin session token.
   if (session.token) apiCall("adminLogout", { token: session.token }).catch(() => {});
+  clearToken();   // stop auto-resuming on next load
   session.pin = null;
   session.token = null;
   session.role = null;
@@ -2086,8 +2125,12 @@ $("adminAddBtn").addEventListener("click", () => showAdminForm(null));
 $("adminFormCancel").addEventListener("click", () => { $("adminForm").hidden = true; adminError(""); });
 $("adminFormSave").addEventListener("click", saveAdmin);
 
-// Start at the login screen; focus the PIN field. No data loads until login.
-setTimeout(() => $("loginPin").focus(), 100);
+// On load, try to silently resume a saved admin session. If there isn't one
+// (or it's expired), fall back to the login screen and focus the PIN field.
+(async () => {
+  const resumed = await tryRestoreSession();
+  if (!resumed) setTimeout(() => $("loginPin").focus(), 100);
+})();
 
 </script>
 </body>
