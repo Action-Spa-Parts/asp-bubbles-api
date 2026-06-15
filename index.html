@@ -513,6 +513,56 @@
   }
   .badge.off { background:#f0efeb; color:var(--muted); }
 
+  /* End-of-day checklist */
+  .navbtn.alert { color: var(--danger); }
+  .navbtn.alert .navicon { animation: navpulse 1.2s ease-in-out infinite; }
+  @keyframes navpulse { 0%,100%{ transform:scale(1); opacity:1; } 50%{ transform:scale(1.18); opacity:.65; } }
+  .cl-banner {
+    background: var(--danger-soft); border:1px solid #fecaca; color:#7f1d1d;
+    border-radius: var(--radius); padding:14px 16px; margin-bottom:16px; font-size:14px; font-weight:500;
+  }
+  .cl-banner.done { background: var(--good-soft); border-color:#bbf7d0; color:#065f46; }
+  .cl-banner.info { background:#eff6ff; border-color:#bfdbfe; color:#1e3a8a; }
+  .cl-meta { color:var(--muted); font-size:13px; margin-bottom:14px; }
+  .cl-cat { margin-bottom:16px; }
+  .cl-cat .ctitle { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--accent); font-weight:700; margin-bottom:8px; }
+  .cl-item {
+    display:flex; align-items:flex-start; gap:12px;
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:12px 14px; margin-bottom:8px;
+  }
+  .cl-item.tappable { cursor:pointer; }
+  .cl-item.tappable:hover { border-color:var(--accent); }
+  .cl-item input[type=checkbox] { width:22px; height:22px; margin:0; flex-shrink:0; accent-color:var(--accent); }
+  .cl-item .cl-label { font-size:14px; line-height:1.4; }
+  .cl-item.checked .cl-label { color:var(--muted); }
+  .cl-item.flagged { border-color:#fecaca; background:#fff1f2; }
+  .cl-flagnote { color:var(--danger); font-size:12px; margin-top:5px; }
+  .cl-submitbar { position:sticky; bottom:70px; padding-top:8px; }
+  .cl-submitbar button { width:100%; padding:14px; font-size:16px; font-weight:700; }
+  .cl-submitbar button:disabled { background:#d4d4d0; border-color:#d4d4d0; color:#8a8a85; cursor:not-allowed; }
+
+  /* Admin review */
+  .cl-run { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); margin-bottom:12px; overflow:hidden; }
+  .cl-runhead { padding:13px 16px; display:flex; justify-content:space-between; align-items:center; gap:10px; cursor:pointer; }
+  .cl-runhead:hover { background:#faf9f6; }
+  .cl-runhead .cl-rh-l { font-weight:600; font-size:14px; }
+  .cl-runhead .cl-rh-sub { color:var(--muted); font-size:12px; margin-top:2px; }
+  .cl-runbody { border-top:1px solid var(--border); padding:8px 16px 12px; }
+  .cl-runbody[hidden] { display:none; }
+  .cl-status { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; padding:2px 9px; border-radius:99px; white-space:nowrap; }
+  .cl-status.completed { background:var(--good-soft); color:var(--good); }
+  .cl-status.pending { background:#fef9c3; color:#854d0e; }
+  .cl-status.missed { background:var(--danger-soft); color:var(--danger); }
+  .cl-arow { display:flex; align-items:flex-start; gap:10px; padding:9px 0; border-bottom:1px dashed var(--border); font-size:13px; }
+  .cl-arow:last-child { border-bottom:none; }
+  .cl-arow .cl-acheck { flex-shrink:0; width:18px; height:18px; accent-color:var(--accent); margin-top:1px; }
+  .cl-arow .cl-amain { flex:1; min-width:0; }
+  .cl-arow .cl-abtns { display:flex; gap:6px; flex-shrink:0; }
+  .cl-arow .cl-abtns button { font-size:11px; padding:4px 9px; border-radius:6px; }
+  .cl-arow.flagged .cl-amain { color:var(--danger); }
+  .cl-acat { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+
   /* Phone layout */
   @media (max-width: 600px) {
     .wrap { padding: 16px 12px 48px; }
@@ -662,6 +712,12 @@
     <div id="activityList"></div>
   </div>
 
+  <!-- ===== Checklist tab ===== -->
+  <div class="view" id="view-checklist" hidden>
+    <h2 class="section" id="checklistHeading">End-of-day checklist</h2>
+    <div id="checklistBody"></div>
+  </div>
+
 </div>
 
 <nav class="bottomnav">
@@ -676,6 +732,9 @@
   </button>
   <button class="navbtn" data-view="earn">
     <span class="navicon">＋</span><span>How to earn</span>
+  </button>
+  <button class="navbtn" data-view="checklist" id="navChecklist">
+    <span class="navicon">📋</span><span>Checklist</span>
   </button>
 </nav>
 
@@ -769,6 +828,7 @@
         <button class="atab" data-atab="rewards">Rewards</button>
         <button class="atab" data-atab="people">People</button>
         <button class="atab" data-atab="admins">Admins</button>
+        <button class="atab" data-atab="checklist">Checklist</button>
       </div>
       <div id="adminError" style="display:none; background:var(--danger-soft); border:1px solid #fecaca; color:#7f1d1d; border-radius:8px; padding:8px 12px; font-size:13px; margin-bottom:12px;"></div>
 
@@ -845,6 +905,52 @@
           </div>
         </div>
         <div class="alist" id="adminAdminList"></div>
+      </div>
+
+      <!-- Checklist tasks -->
+      <div class="asec" id="asec-checklist" hidden>
+        <button class="primary admin-add-btn" id="clTaskAddBtn">＋ Add a task</button>
+        <div class="admin-form" id="clTaskForm" hidden>
+          <div class="ftitle" id="clTaskFormTitle">New task</div>
+          <input type="hidden" id="clTaskId">
+          <div class="field"><label>Task text</label><input type="text" id="clTaskLabel" placeholder="e.g. All exterior lights are turned OFF"></div>
+          <div class="row2">
+            <div class="field"><label>Section</label><input type="text" id="clTaskCategory" placeholder="Building & Security"></div>
+            <div class="field"><label>Order (lower shows first)</label><input type="number" id="clTaskSort" step="1" placeholder="100"></div>
+          </div>
+          <div class="formbtns">
+            <button class="ghost" id="clTaskCancel">Cancel</button>
+            <button class="primary" id="clTaskSave">Save</button>
+          </div>
+        </div>
+        <p class="muted" style="font-size:12px; margin:0 0 10px;">Changes apply to tomorrow's checklist onward — today's is already set.</p>
+        <div class="alist" id="clTaskList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Flag-a-checklist-task modal (manager only) ===== -->
+<div class="overlay" id="clFlagModal" hidden style="z-index:120;">
+  <div class="overlay-card narrow">
+    <div class="dhead">
+      <div class="dname">Flag task</div>
+      <button class="dclose" id="clFlagClose" aria-label="Close">&times;</button>
+    </div>
+    <div class="dbody">
+      <p id="clFlagItemLabel" style="font-size:14px; margin:0 0 14px; font-weight:600;"></p>
+      <div style="display:flex; flex-direction:column; gap:5px; margin-bottom:12px;">
+        <label style="font-size:12px; color:var(--muted);">What was wrong? (optional note)</label>
+        <input type="text" id="clFlagNote" placeholder="e.g. back light was left on">
+      </div>
+      <div style="display:flex; flex-direction:column; gap:5px; margin-bottom:12px;">
+        <label style="font-size:12px; color:var(--muted);">Bubbles to deduct (0 = none)</label>
+        <input type="number" id="clFlagDeduct" step="1" min="0" value="0">
+      </div>
+      <div id="clFlagError" style="color:var(--danger); font-size:13px; display:none; margin-bottom:10px;"></div>
+      <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <button class="ghost" id="clFlagCancel">Cancel</button>
+        <button class="primary" id="clFlagSave">Flag &amp; deduct</button>
       </div>
     </div>
   </div>
@@ -928,7 +1034,13 @@ const state = {
   view: "balances", // balances | rewards | earn
   pendingRedeem: null, // reward awaiting confirm
   pendingTeam: null,   // {metric, amount} awaiting team-award confirm
-  admin: { rules: [], rewards: [], employees: [], admins: [], tab: "rules" }, // manager admin screens
+  admin: { rules: [], rewards: [], employees: [], admins: [], checklistTasks: [], tab: "rules" }, // manager admin screens
+  checklist: null,      // summary from getData {date, assignee, status, mine, total, checked, flagged}
+  checklistFull: null,  // employee tab: full run + items (from getChecklist)
+  checklistAdmin: null, // manager review (from getChecklistAdmin)
+  checkLocal: {},       // employee's local checkbox state before submit {itemId: bool}
+  clAlerted: false,     // whether we've popped the "your turn" alert this load
+  flagItemId: null,     // item being flagged
 };
 
 function normalizeCatalog(rows) {
@@ -1383,12 +1495,13 @@ function renderActivity() {
 
 function switchView(view) {
   state.view = view;
-  ["balances", "rewards", "activity", "earn"].forEach(v => {
+  ["balances", "rewards", "activity", "earn", "checklist"].forEach(v => {
     $("view-" + v).hidden = (v !== view);
   });
   document.querySelectorAll(".navbtn").forEach(b => {
     b.classList.toggle("active", b.dataset.view === view);
   });
+  if (view === "checklist") loadChecklist();
   render();
 }
 
@@ -1399,6 +1512,231 @@ function render() {
   renderRewards();
   renderActivity();
   renderEarn();
+  updateChecklistNav();
+}
+
+// Turn the Checklist nav button red + pulsing when it's this worker's turn and
+// they haven't finished it yet.
+function updateChecklistNav() {
+  const btn = $("navChecklist");
+  if (!btn) return;
+  const c = state.checklist;
+  const needsAttention = !!(c && c.mine && c.status !== "completed");
+  btn.classList.toggle("alert", needsAttention);
+}
+
+/* ---------- End-of-day checklist ---------- */
+
+function fmtRunDate(s) {
+  const d = new Date(s);
+  if (isNaN(d)) return s || "";
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+function groupByCategory(items) {
+  const groups = []; const idx = {};
+  items.forEach(it => {
+    if (!(it.category in idx)) { idx[it.category] = groups.length; groups.push({ category: it.category, items: [] }); }
+    groups[idx[it.category]].items.push(it);
+  });
+  return groups;
+}
+
+async function loadChecklist() {
+  const body = $("checklistBody");
+  body.innerHTML = `<div class="cl-meta">Loading…</div>`;
+  try {
+    if (session.role === "manager") {
+      const data = await apiCall("getChecklistAdmin", { pin: session.pin });
+      if (data.error) { body.innerHTML = `<div class="cl-meta">${escapeHtml(data.error)}</div>`; return; }
+      state.checklistAdmin = data;
+      renderChecklistAdmin();
+    } else {
+      const data = await apiCall("getChecklist", { pin: session.pin });
+      if (data.error) { body.innerHTML = `<div class="cl-meta">${escapeHtml(data.error)}</div>`; return; }
+      state.checklistFull = data;
+      state.checkLocal = {};
+      (data.items || []).forEach(it => { state.checkLocal[it.id] = !!it.checked; });
+      renderChecklistEmployee();
+    }
+  } catch (err) {
+    body.innerHTML = `<div class="cl-meta">Couldn't load (${escapeHtml(err && err.message ? err.message : String(err))}).</div>`;
+  }
+}
+
+// ----- Employee view -----
+function renderChecklistEmployee() {
+  const body = $("checklistBody");
+  $("checklistHeading").textContent = "End-of-day checklist";
+  const c = state.checklistFull;
+  if (!c || !c.assignee) {
+    body.innerHTML = `<div class="cl-banner info">No one is assigned to close up today yet. Check back later.</div>`;
+    return;
+  }
+  if (!c.mine) {
+    body.innerHTML = `<div class="cl-banner info"><strong>${escapeHtml(c.assignee)}</strong> is on closing duty today — ${c.status === "completed" ? "checklist completed ✓" : "checklist not done yet."}</div>`;
+    return;
+  }
+  if (c.status === "completed") {
+    body.innerHTML = `<div class="cl-banner done">✓ You completed today's closing checklist. Thanks!</div>` + renderChecklistReadonly(c.items);
+    return;
+  }
+  const groups = groupByCategory(c.items);
+  let html = `<div class="cl-banner">It's your turn to close up. Check off each task — every box must be ticked before you can submit.</div>`;
+  html += groups.map(g => `
+    <div class="cl-cat">
+      <div class="ctitle">${escapeHtml(g.category)}</div>
+      ${g.items.map(it => {
+        const on = !!state.checkLocal[it.id];
+        return `<label class="cl-item tappable ${on ? "checked" : ""}">
+          <input type="checkbox" ${on ? "checked" : ""} data-cb="${it.id}">
+          <span class="cl-label">${escapeHtml(it.label)}</span>
+        </label>`;
+      }).join("")}
+    </div>`).join("");
+  const total = c.items.length;
+  const done = c.items.filter(it => state.checkLocal[it.id]).length;
+  const allChecked = total > 0 && done === total;
+  html += `<div class="cl-submitbar"><button class="primary" id="clSubmitBtn" ${allChecked ? "" : "disabled"}>${allChecked ? "Submit checklist" : "Check all to submit (" + done + "/" + total + ")"}</button></div>`;
+  body.innerHTML = html;
+
+  body.querySelectorAll("input[data-cb]").forEach(cb => {
+    cb.addEventListener("change", () => {
+      state.checkLocal[parseInt(cb.dataset.cb, 10)] = cb.checked;
+      renderChecklistEmployee();
+    });
+  });
+  const sb = $("clSubmitBtn");
+  if (sb) sb.addEventListener("click", submitChecklistNow);
+}
+
+function renderChecklistReadonly(items) {
+  return groupByCategory(items).map(g => `
+    <div class="cl-cat">
+      <div class="ctitle">${escapeHtml(g.category)}</div>
+      ${g.items.map(it => `
+        <div class="cl-item ${it.checked ? "checked" : ""} ${it.flagged ? "flagged" : ""}">
+          <span style="font-size:18px;">${it.checked ? "✅" : "⬜"}</span>
+          <span class="cl-label">${escapeHtml(it.label)}${it.flagged ? ` <span class="cl-flagnote">⚑ flagged</span>` : ""}</span>
+        </div>`).join("")}
+    </div>`).join("");
+}
+
+async function submitChecklistNow() {
+  const c = state.checklistFull;
+  if (!c) return;
+  const total = c.items.length;
+  const done = c.items.filter(it => state.checkLocal[it.id]).length;
+  if (done !== total) return;
+  const btn = $("clSubmitBtn"); if (btn) { btn.disabled = true; btn.textContent = "Submitting…"; }
+  try {
+    const res = await apiCall("submitChecklist", { pin: session.pin });
+    if (res.error) alert(res.error);
+    await loadChecklist();
+    fetchData();   // clears the red tab
+  } catch (err) {
+    alert("Error: " + (err && err.message ? err.message : err));
+    loadChecklist();
+  }
+}
+
+// ----- Manager review -----
+function renderChecklistAdmin() {
+  const body = $("checklistBody");
+  $("checklistHeading").textContent = "Closing checklist — review";
+  const data = state.checklistAdmin;
+  if (!data || !data.runs || !data.runs.length) {
+    body.innerHTML = `<div class="cl-banner info">No checklist activity yet.</div>`;
+    return;
+  }
+  const today = data.today;
+  body.innerHTML = data.runs.map((r, i) => {
+    let statusClass = r.status, statusLabel = (r.status === "completed" ? "Completed" : "Pending");
+    if (r.status !== "completed" && r.run_date < today) { statusClass = "missed"; statusLabel = "Not completed"; }
+    const flaggedCount = r.items.filter(it => it.flagged).length;
+    const checkedCount = r.items.filter(it => it.checked).length;
+    const open = i === 0;
+    return `
+      <div class="cl-run">
+        <div class="cl-runhead" data-run="${r.id}">
+          <div>
+            <div class="cl-rh-l">${fmtRunDate(r.run_date)} — ${escapeHtml(r.assignee || "Unassigned")}</div>
+            <div class="cl-rh-sub">${checkedCount}/${r.items.length} checked${flaggedCount ? " · " + flaggedCount + " flagged" : ""}</div>
+          </div>
+          <span class="cl-status ${statusClass}">${statusLabel}</span>
+        </div>
+        <div class="cl-runbody" id="clrun-${r.id}" ${open ? "" : "hidden"}>
+          ${r.items.length ? groupByCategory(r.items).map(g => `
+            <div class="cl-acat" style="margin-top:10px;">${escapeHtml(g.category)}</div>
+            ${g.items.map(it => `
+              <div class="cl-arow ${it.flagged ? "flagged" : ""}">
+                <input type="checkbox" class="cl-acheck" ${it.checked ? "checked" : ""} data-correct="${it.id}" title="Fix a missed/wrong check">
+                <div class="cl-amain">
+                  ${escapeHtml(it.label)}
+                  ${it.flagged ? `<div class="cl-flagnote">⚑ ${escapeHtml(it.flag_note || "Flagged")}${it.flagged_by ? " — " + escapeHtml(it.flagged_by) : ""}</div>` : ""}
+                </div>
+                <div class="cl-abtns">
+                  ${it.flagged
+                    ? `<button class="ghost" data-unflag="${it.id}">Unflag</button>`
+                    : `<button class="ghost" data-flag="${it.id}" data-label="${escapeAttr(it.label)}">Flag</button>`}
+                </div>
+              </div>`).join("")}
+          `).join("") : `<div class="cl-meta" style="padding:8px 0;">No tasks were on this run.</div>`}
+        </div>
+      </div>`;
+  }).join("");
+
+  body.querySelectorAll(".cl-runhead").forEach(h => h.addEventListener("click", () => {
+    const rb = $("clrun-" + h.dataset.run); if (rb) rb.hidden = !rb.hidden;
+  }));
+  body.querySelectorAll("[data-correct]").forEach(cb => cb.addEventListener("click", (e) => {
+    e.stopPropagation();
+    adminChecklistAction("correctChecklistItem", { itemId: parseInt(cb.dataset.correct, 10), checked: cb.checked });
+  }));
+  body.querySelectorAll("[data-flag]").forEach(b => b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openFlag(parseInt(b.dataset.flag, 10), b.dataset.label);
+  }));
+  body.querySelectorAll("[data-unflag]").forEach(b => b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    adminChecklistAction("unflagChecklistItem", { itemId: parseInt(b.dataset.unflag, 10) });
+  }));
+}
+
+async function adminChecklistAction(action, params) {
+  try {
+    const res = await apiCall(action, Object.assign({ pin: session.pin }, params));
+    if (res.error) alert(res.error);
+    await loadChecklist();
+    fetchData();
+  } catch (err) { alert("Error: " + (err && err.message ? err.message : err)); }
+}
+
+function openFlag(itemId, label) {
+  state.flagItemId = itemId;
+  $("clFlagItemLabel").textContent = label || "";
+  $("clFlagNote").value = "";
+  $("clFlagDeduct").value = "0";
+  $("clFlagError").style.display = "none";
+  $("clFlagModal").hidden = false;
+}
+
+async function saveFlag() {
+  if (state.flagItemId == null) return;
+  try {
+    const res = await apiCall("flagChecklistItem", {
+      pin: session.pin, itemId: state.flagItemId,
+      note: $("clFlagNote").value, deduct: $("clFlagDeduct").value,
+    });
+    if (res.error) { $("clFlagError").textContent = res.error; $("clFlagError").style.display = "block"; return; }
+    $("clFlagModal").hidden = true;
+    state.flagItemId = null;
+    await loadChecklist();
+    fetchData();
+  } catch (err) {
+    $("clFlagError").textContent = "Error: " + (err && err.message ? err.message : err);
+    $("clFlagError").style.display = "block";
+  }
 }
 
 /* ---------- Award dialog ---------- */
@@ -1596,9 +1934,12 @@ function renderAwardHistory(name) {
 
 // Simple reusable confirm dialog.
 let _confirmCb = null;
-function askConfirm(message, onYes) {
+function askConfirm(message, onYes, opts) {
+  opts = opts || {};
   _confirmCb = onYes;
   $("confirmText").textContent = message;
+  $("confirmYes").textContent = opts.okText || "Confirm";
+  $("confirmNo").style.display = opts.hideCancel ? "none" : "";
   $("confirmModal").hidden = false;
 }
 
@@ -1665,9 +2006,21 @@ function applyData(data) {
   state.myRequests = data.myRequests || [];
   state.pending    = data.pending || [];
   state.approved   = data.approved || [];
+  state.checklist = data.checklist || null;
   if (data.role) session.role = data.role;
   if (data.name) session.name = data.name;
   render();
+  maybeAlertChecklist();
+}
+
+// One-time, per-load pop-up when it's this worker's turn to close up.
+function maybeAlertChecklist() {
+  const c = state.checklist;
+  if (c && c.mine && c.status !== "completed" && !state.clAlerted) {
+    state.clAlerted = true;
+    askConfirm("It's your turn to close up the warehouse today. Please complete the end-of-day checklist before you leave.",
+      () => switchView("checklist"), { okText: "Open checklist", hideCancel: true });
+  }
 }
 
 async function fetchData() {
@@ -1858,6 +2211,7 @@ function hideAdminForms() {
   $("rewardForm").hidden = true;
   $("empForm").hidden = true;
   $("adminForm").hidden = true;
+  $("clTaskForm").hidden = true;
 }
 
 async function openAdmin() {
@@ -1878,6 +2232,7 @@ async function loadAdmin() {
     state.admin.rules = data.rules || [];
     state.admin.rewards = data.rewards || [];
     state.admin.employees = data.employees || [];
+    state.admin.checklistTasks = data.checklistTasks || [];
     state.admin.admins = (adminsRes && adminsRes.admins) || [];
     renderAdmin();
   } catch (err) {
@@ -1887,7 +2242,7 @@ async function loadAdmin() {
 
 function switchAdminTab(tab) {
   state.admin.tab = tab;
-  ["rules", "rewards", "people", "admins"].forEach(t => { $("asec-" + t).hidden = (t !== tab); });
+  ["rules", "rewards", "people", "admins", "checklist"].forEach(t => { $("asec-" + t).hidden = (t !== tab); });
   document.querySelectorAll(".atab").forEach(b => b.classList.toggle("active", b.dataset.atab === tab));
   adminError("");
   hideAdminForms();
@@ -1913,6 +2268,7 @@ function renderAdmin() {
   renderRewardAdmin();
   renderEmpAdmin();
   renderAdminAdmin();
+  renderChecklistTaskAdmin();
 }
 
 // ----- Rules -----
@@ -2089,6 +2445,45 @@ async function saveAdmin() {
   await adminSave(payload.id ? "updateAdmin" : "addAdmin", { admin: payload });
 }
 
+// ----- Checklist tasks (Manage) -----
+function renderChecklistTaskAdmin() {
+  const el = $("clTaskList");
+  const tasks = state.admin.checklistTasks;
+  if (!tasks.length) { el.innerHTML = `<div class="muted" style="font-size:13px;">No tasks yet. Tap "Add a task".</div>`; return; }
+  el.innerHTML = tasks.map(t => `
+      <div class="arow ${t.active ? "" : "inactive"}">
+        <div class="ainfo">
+          <div class="atitle">${escapeHtml(t.label)}${t.active ? "" : `<span class="badge off">Off</span>`}</div>
+          <div class="asub">${escapeHtml(t.category || "General")} · order ${t.sortOrder}</div>
+        </div>
+        <div class="aactions">
+          <button class="ghost" data-edit="${t.id}">Edit</button>
+          <button class="ghost" data-toggle="${t.id}" data-active="${t.active ? 0 : 1}">${t.active ? "Turn off" : "Turn on"}</button>
+        </div>
+      </div>`).join("");
+  el.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => editChecklistTask(parseInt(b.dataset.edit, 10))));
+  el.querySelectorAll("[data-toggle]").forEach(b => b.addEventListener("click", () => adminSave("setChecklistTaskActive", { id: parseInt(b.dataset.toggle, 10), active: b.dataset.active === "1" })));
+}
+function showChecklistTaskForm(t) {
+  $("clTaskFormTitle").textContent = t ? "Edit task" : "New task";
+  $("clTaskId").value = t ? t.id : "";
+  $("clTaskLabel").value = t ? t.label : "";
+  $("clTaskCategory").value = t ? (t.category || "") : "";
+  $("clTaskSort").value = t ? t.sortOrder : "";
+  adminError("");
+  $("clTaskForm").hidden = false;
+}
+function editChecklistTask(id) { const t = state.admin.checklistTasks.find(x => x.id === id); if (t) showChecklistTaskForm(t); }
+async function saveChecklistTask() {
+  const payload = {
+    id: $("clTaskId").value || undefined,
+    label: $("clTaskLabel").value,
+    category: $("clTaskCategory").value,
+    sortOrder: $("clTaskSort").value,
+  };
+  await adminSave(payload.id ? "updateChecklistTask" : "addChecklistTask", { task: payload });
+}
+
 /* ---------- Event wiring ---------- */
 
 $("loginForm").addEventListener("submit", (e) => {
@@ -2154,6 +2549,14 @@ $("empSave").addEventListener("click", saveEmp);
 $("adminAddBtn").addEventListener("click", () => showAdminForm(null));
 $("adminFormCancel").addEventListener("click", () => { $("adminForm").hidden = true; adminError(""); });
 $("adminFormSave").addEventListener("click", saveAdmin);
+$("clTaskAddBtn").addEventListener("click", () => showChecklistTaskForm(null));
+$("clTaskCancel").addEventListener("click", () => { $("clTaskForm").hidden = true; adminError(""); });
+$("clTaskSave").addEventListener("click", saveChecklistTask);
+
+// Checklist flag modal.
+$("clFlagSave").addEventListener("click", saveFlag);
+$("clFlagCancel").addEventListener("click", () => { $("clFlagModal").hidden = true; state.flagItemId = null; });
+$("clFlagClose").addEventListener("click", () => { $("clFlagModal").hidden = true; state.flagItemId = null; });
 
 // On load, try to silently resume a saved admin session. If there isn't one
 // (or it's expired), fall back to the login screen and focus the PIN field.

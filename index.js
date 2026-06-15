@@ -81,6 +81,66 @@ async function ensureSchema() {
       expires_at TIMESTAMPTZ NOT NULL
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS admin_sessions_admin_idx ON admin_sessions(admin_id)`);
+
+  // End-of-day warehouse checklist: task definitions, daily runs (one assigned
+  // worker per day), and per-task results (with admin flags).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS checklist_tasks (
+      id         SERIAL PRIMARY KEY,
+      category   TEXT NOT NULL DEFAULT 'General',
+      label      TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active     BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS checklist_runs (
+      id           SERIAL PRIMARY KEY,
+      run_date     DATE NOT NULL UNIQUE,
+      employee_id  INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+      status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','completed')),
+      submitted_at TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS checklist_items (
+      id         SERIAL PRIMARY KEY,
+      run_id     INTEGER NOT NULL REFERENCES checklist_runs(id) ON DELETE CASCADE,
+      task_id    INTEGER REFERENCES checklist_tasks(id) ON DELETE SET NULL,
+      category   TEXT NOT NULL DEFAULT '',
+      label      TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      checked    BOOLEAN NOT NULL DEFAULT FALSE,
+      flagged    BOOLEAN NOT NULL DEFAULT FALSE,
+      flag_note  TEXT,
+      flagged_by TEXT,
+      flagged_at TIMESTAMPTZ
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS checklist_items_run_idx ON checklist_items(run_id)`);
+
+  // Seed the standard 16 tasks once (only if the table is empty).
+  const { rows: tc } = await pool.query('SELECT COUNT(*)::int AS n FROM checklist_tasks');
+  if (tc[0].n === 0) {
+    await pool.query(`
+      INSERT INTO checklist_tasks (category, label, sort_order) VALUES
+        ('Printers & Supplies', 'Refill all printer paper trays (label, packing slip, and document printers).', 10),
+        ('Printers & Supplies', 'Replace any low or empty toner / ink and set out spares if needed.', 20),
+        ('Printers & Supplies', 'Restock packing tape, labels, and shipping supplies at each station.', 30),
+        ('Climate Control', 'All fans are turned OFF.', 40),
+        ('Climate Control', 'All A/C units are turned OFF.', 50),
+        ('Climate Control', 'Heaters / space heaters are turned OFF (if applicable).', 60),
+        ('Equipment & Power', 'Forklifts / pallet jacks parked and plugged in to charge.', 70),
+        ('Equipment & Power', 'Scanners and handheld devices placed on chargers.', 80),
+        ('Equipment & Power', 'Computers / monitors at workstations shut down or locked.', 90),
+        ('Housekeeping', 'Aisles and walkways clear; pallets and carts put away.', 100),
+        ('Housekeeping', 'Trash and cardboard removed; recycling emptied.', 110),
+        ('Housekeeping', 'Workstations wiped down and organized for the next shift.', 120),
+        ('Building & Security', 'All gates are CLOSED and locked.', 130),
+        ('Building & Security', 'All overhead / dock doors are CLOSED and secured.', 140),
+        ('Building & Security', 'All exterior and interior LIGHTS are turned OFF.', 150),
+        ('Building & Security', 'All entry doors locked.', 160)`);
+    console.log('Schema: seeded 16 checklist tasks.');
+  }
 }
 
 // =================================================================
@@ -304,6 +364,8 @@ async function getData(who) {
       : Promise.resolve({ rows: [] }),
   ]);
 
+  const checklist = await checklistSummary(who);
+
   return {
     role: who.role,
     name: who.name,
@@ -315,6 +377,7 @@ async function getData(who) {
     pending: pending.rows,
     approved: approved.rows,
     allAwards: allAwards.rows,
+    checklist,
   };
 }
 
@@ -575,7 +638,7 @@ async function fulfillRedemption(who, redemptionId) {
 // them to onboard/remind staff).
 async function getAdmin(who) {
   if (!isManager(who)) return { error: 'Manager only' };
-  const [rules, rewards, employees] = await Promise.all([
+  const [rules, rewards, employees, checklistTasks] = await Promise.all([
     pool.query(`
       SELECT id, metric, bubbles, category, description,
              team_wide AS "teamWide", active
@@ -588,8 +651,14 @@ async function getAdmin(who) {
              e.starting_balance AS "startingBalance", e.active, b.balance
         FROM employees e JOIN balances b ON b.id = e.id
        ORDER BY e.active DESC, e.name`),
+    pool.query(`
+      SELECT id, category, label, sort_order AS "sortOrder", active
+        FROM checklist_tasks ORDER BY active DESC, sort_order, id`),
   ]);
-  return { rules: rules.rows, rewards: rewards.rows, employees: employees.rows };
+  return {
+    rules: rules.rows, rewards: rewards.rows, employees: employees.rows,
+    checklistTasks: checklistTasks.rows,
+  };
 }
 
 // ---------- Rules ----------
@@ -862,6 +931,216 @@ async function setAdminActive(who, id, active) {
 }
 
 // =================================================================
+// End-of-day checklist
+// =================================================================
+
+// "Today" anchored to US Eastern so the date doesn't roll at an awkward local
+// hour (warehouse closes well before midnight ET). Constant — safe to inline.
+const BIZ_DATE = "(now() AT TIME ZONE 'America/New_York')::date";
+
+async function nameForEmpId(id) {
+  if (id == null) return null;
+  const { rows } = await pool.query('SELECT name FROM employees WHERE id = $1', [id]);
+  return rows.length ? rows[0].name : null;
+}
+
+// Make sure today's run exists; if not, fairly pick a closer and snapshot the
+// active tasks into it. Serialized by an advisory lock so two devices opening
+// the app at once can't create two runs. Returns the run row (or null if there
+// are no active employees to assign).
+async function ensureTodayRun() {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(76123451)');
+    let { rows } = await client.query(`SELECT * FROM checklist_runs WHERE run_date = ${BIZ_DATE}`);
+    if (rows.length) { await client.query('COMMIT'); return rows[0]; }
+
+    // Avoid assigning the same person two days in a row when possible; otherwise
+    // pick whoever has gone the longest ago (never-assigned first), random tiebreak.
+    const { rows: last } = await client.query(
+      'SELECT employee_id FROM checklist_runs ORDER BY run_date DESC, id DESC LIMIT 1');
+    const lastId = (last.length && last[0].employee_id != null) ? last[0].employee_id : -1;
+    const pickSql = (excl) => `
+      SELECT e.id FROM employees e
+       WHERE e.active = true ${excl ? 'AND e.id <> $1' : ''}
+       ORDER BY (SELECT MAX(run_date) FROM checklist_runs r WHERE r.employee_id = e.id) ASC NULLS FIRST, random()
+       LIMIT 1`;
+    let pick = await client.query(pickSql(true), [lastId]);
+    if (!pick.rows.length) pick = await client.query(pickSql(false));
+    if (!pick.rows.length) { await client.query('ROLLBACK'); return null; }
+
+    const ins = await client.query(
+      `INSERT INTO checklist_runs (run_date, employee_id) VALUES (${BIZ_DATE}, $1) RETURNING *`,
+      [pick.rows[0].id]);
+    const run = ins.rows[0];
+    await client.query(
+      `INSERT INTO checklist_items (run_id, task_id, category, label, sort_order)
+       SELECT $1, id, category, label, sort_order FROM checklist_tasks WHERE active = true`,
+      [run.id]);
+    await client.query('COMMIT');
+    return run;
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// Compact summary for getData (drives the red tab + alert).
+async function checklistSummary(who) {
+  const run = await ensureTodayRun();
+  if (!run) return { date: null, assignee: null, status: null, mine: false, total: 0, checked: 0, flagged: 0 };
+  const assignee = await nameForEmpId(run.employee_id);
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE checked)::int AS checked,
+            COUNT(*) FILTER (WHERE flagged)::int AS flagged
+       FROM checklist_items WHERE run_id = $1`, [run.id]);
+  return {
+    date: run.run_date, assignee, status: run.status,
+    mine: !!(who && who.role === 'employee' && assignee === who.name),
+    total: rows[0].total, checked: rows[0].checked, flagged: rows[0].flagged,
+  };
+}
+
+// Full today's run for the employee Checklist tab.
+async function getChecklist(who) {
+  if (!who) return { error: 'Not authorized' };
+  const run = await ensureTodayRun();
+  if (!run) return { date: null, assignee: null, status: null, mine: false, items: [] };
+  const assignee = await nameForEmpId(run.employee_id);
+  const { rows: items } = await pool.query(
+    `SELECT id, category, label, checked, flagged FROM checklist_items WHERE run_id = $1 ORDER BY sort_order, id`,
+    [run.id]);
+  return {
+    date: run.run_date, assignee, status: run.status,
+    mine: who.role === 'employee' && assignee === who.name,
+    submittedAt: run.submitted_at, items,
+  };
+}
+
+// The assigned worker submits. All boxes must be checked (enforced here too).
+async function submitChecklist(who) {
+  if (!who || who.role !== 'employee') return { error: 'Only the assigned worker can submit' };
+  const run = await ensureTodayRun();
+  if (!run) return { error: 'No checklist today' };
+  const assignee = await nameForEmpId(run.employee_id);
+  if (assignee !== who.name) return { error: 'It is not your turn today' };
+  if (run.status === 'completed') return { error: 'Already submitted' };
+  await pool.query('UPDATE checklist_items SET checked = true WHERE run_id = $1', [run.id]);
+  await pool.query(`UPDATE checklist_runs SET status = 'completed', submitted_at = now() WHERE id = $1`, [run.id]);
+  return { ok: true };
+}
+
+// Manager review: recent runs with their items.
+async function getChecklistAdmin(who) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  await ensureTodayRun();
+  const { rows: runs } = await pool.query(`
+    SELECT r.id, to_char(r.run_date, 'YYYY-MM-DD') AS run_date, r.status, r.submitted_at,
+           e.name AS assignee
+      FROM checklist_runs r LEFT JOIN employees e ON e.id = r.employee_id
+     ORDER BY r.run_date DESC LIMIT 21`);
+  const ids = runs.map(r => r.id);
+  const byRun = {};
+  if (ids.length) {
+    const { rows: items } = await pool.query(`
+      SELECT id, run_id, category, label, checked, flagged, flag_note, flagged_by
+        FROM checklist_items WHERE run_id = ANY($1) ORDER BY sort_order, id`, [ids]);
+    items.forEach(it => { (byRun[it.run_id] = byRun[it.run_id] || []).push(it); });
+  }
+  const todayStr = (await pool.query(`SELECT to_char(${BIZ_DATE}, 'YYYY-MM-DD') AS d`)).rows[0].d;
+  return { today: todayStr, runs: runs.map(r => ({ ...r, items: byRun[r.id] || [] })) };
+}
+
+// Flag a task as missed/wrong, with an optional bubble deduction in one step.
+async function flagChecklistItem(who, body) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  body = body || {};
+  const itemId = cleanInt(body.itemId);
+  if (itemId === null) return { error: 'Bad item' };
+  const note = String(body.note || '').trim();
+  const deduct = cleanInt(body.deduct) || 0;
+  const { rows } = await pool.query(`
+    SELECT ci.id, ci.label, r.employee_id
+      FROM checklist_items ci JOIN checklist_runs r ON r.id = ci.run_id
+     WHERE ci.id = $1`, [itemId]);
+  if (!rows.length) return { error: 'Item not found' };
+  const it = rows[0];
+  await pool.query(
+    `UPDATE checklist_items SET flagged = true, flag_note = $2, flagged_by = $3, flagged_at = now() WHERE id = $1`,
+    [itemId, note || null, who.name]);
+  if (deduct > 0 && it.employee_id != null) {
+    await pool.query(
+      `INSERT INTO awards (employee_id, metric, amount, awarded_by, note)
+       VALUES ($1, $2, $3, $4, 'Checklist flag')`,
+      [it.employee_id, 'Checklist: ' + String(it.label).slice(0, 60), -Math.abs(deduct), who.name]);
+  }
+  return { ok: true };
+}
+
+async function unflagChecklistItem(who, itemId) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const id = cleanInt(itemId);
+  if (id === null) return { error: 'Bad item' };
+  await pool.query(
+    `UPDATE checklist_items SET flagged = false, flag_note = NULL, flagged_by = NULL, flagged_at = NULL WHERE id = $1`,
+    [id]);
+  return { ok: true };
+}
+
+// Manager fixes a check the worker missed (or unchecks a wrong one).
+async function correctChecklistItem(who, body) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  body = body || {};
+  const id = cleanInt(body.itemId);
+  if (id === null) return { error: 'Bad item' };
+  await pool.query('UPDATE checklist_items SET checked = $2 WHERE id = $1', [id, !!body.checked]);
+  return { ok: true };
+}
+
+// ----- Checklist task management (Manage → Checklist) -----
+
+async function addChecklistTask(who, t) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  t = t || {};
+  const label = String(t.label || '').trim();
+  if (!label) return { error: 'Task text is required' };
+  const category = String(t.category || 'General').trim() || 'General';
+  const sort = cleanInt(t.sortOrder);
+  await pool.query(
+    `INSERT INTO checklist_tasks (category, label, sort_order, active) VALUES ($1, $2, $3, true)`,
+    [category, label, sort === null ? 999 : sort]);
+  return { ok: true };
+}
+
+async function updateChecklistTask(who, t) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  t = t || {};
+  const id = cleanInt(t.id);
+  const label = String(t.label || '').trim();
+  if (id === null) return { error: 'Bad task id' };
+  if (!label) return { error: 'Task text is required' };
+  const category = String(t.category || 'General').trim() || 'General';
+  const sort = cleanInt(t.sortOrder);
+  const { rowCount } = await pool.query(
+    `UPDATE checklist_tasks SET category = $1, label = $2, sort_order = $3 WHERE id = $4`,
+    [category, label, sort === null ? 999 : sort, id]);
+  if (!rowCount) return { error: 'Task not found' };
+  return { ok: true };
+}
+
+async function setChecklistTaskActive(who, id, active) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const tid = cleanInt(id);
+  if (tid === null) return { error: 'Bad task id' };
+  await pool.query('UPDATE checklist_tasks SET active = $1 WHERE id = $2', [!!active, tid]);
+  return { ok: true };
+}
+
+// =================================================================
 // HTTP server
 // =================================================================
 
@@ -942,6 +1221,16 @@ app.post('/', async (req, res) => {
         case 'addAdmin':          out = await addAdmin(who, body.admin); break;
         case 'updateAdmin':       out = await updateAdmin(who, body.admin); break;
         case 'setAdminActive':    out = await setAdminActive(who, body.id, body.active); break;
+        // ----- End-of-day checklist -----
+        case 'getChecklist':         out = await getChecklist(who); break;
+        case 'submitChecklist':      out = await submitChecklist(who); break;
+        case 'getChecklistAdmin':    out = await getChecklistAdmin(who); break;
+        case 'flagChecklistItem':    out = await flagChecklistItem(who, body); break;
+        case 'unflagChecklistItem':  out = await unflagChecklistItem(who, body.itemId); break;
+        case 'correctChecklistItem': out = await correctChecklistItem(who, body); break;
+        case 'addChecklistTask':     out = await addChecklistTask(who, body.task); break;
+        case 'updateChecklistTask':  out = await updateChecklistTask(who, body.task); break;
+        case 'setChecklistTaskActive': out = await setChecklistTaskActive(who, body.id, body.active); break;
         default:                  out = { error: 'Unknown action: ' + action };
       }
     }
