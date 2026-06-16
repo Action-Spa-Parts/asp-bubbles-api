@@ -610,7 +610,7 @@
 
 <!-- ===== Login gate (shown until a valid PIN is entered) ===== -->
 <div class="overlay" id="loginOverlay">
-  <div class="overlay-card narrow" style="overflow:hidden;">
+  <div class="overlay-card narrow">
     <div style="text-align:center; padding:28px 22px 8px;">
       <img src="icon-192.png" alt="ASP Bubbles logo" width="68" height="68"
            style="border-radius:18px; box-shadow: var(--shadow-card);">
@@ -645,9 +645,17 @@
       </div>
     </form>
 
-    <!-- Create admin account view -->
-    <form class="dbody" id="adminSignupForm" hidden style="display:flex; flex-direction:column; gap:12px; padding-top:8px;">
-      <p class="muted" style="margin:0; font-size:13px; text-align:center;">Create an admin account</p>
+  </div>
+</div>
+
+<!-- ===== Create-account popup (opened from "Admin sign in") ===== -->
+<div class="overlay" id="signupModal" hidden style="z-index:200;">
+  <div class="overlay-card narrow">
+    <div class="dhead">
+      <div class="dname">Create an admin account</div>
+      <button class="dclose" id="signupClose" aria-label="Close">&times;</button>
+    </div>
+    <form class="dbody" id="adminSignupForm" style="display:flex; flex-direction:column; gap:12px;">
       <input type="text" id="adminSignupName" placeholder="Your name" autocomplete="name"
              style="font-size:16px; padding:12px; font-family:inherit;">
       <input type="email" id="adminSignupEmail" placeholder="Email" autocomplete="email"
@@ -655,8 +663,10 @@
       <input type="password" id="adminSignupPassword" placeholder="Password (8+ characters)" autocomplete="new-password"
              style="font-size:16px; padding:12px; font-family:inherit;">
       <div id="adminSignupError" style="color: var(--danger); font-size:13px; display:none; text-align:center;"></div>
-      <button type="submit" class="primary" style="padding:13px; font-size:15px; font-weight:600;">Create account</button>
-      <button type="button" class="ghost" id="backToAdminLogin" style="padding:9px 12px; font-size:13px;">← Back</button>
+      <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <button type="button" class="ghost" id="signupCancel">Cancel</button>
+        <button type="submit" class="primary">Create account</button>
+      </div>
     </form>
   </div>
 </div>
@@ -2206,8 +2216,7 @@ function updateIdentityUi() {
 function showLoginView(which) {
   $("loginForm").hidden = which !== "pin";
   $("adminLoginForm").hidden = which !== "adminLogin";
-  $("adminSignupForm").hidden = which !== "adminSignup";
-  ["loginError", "adminLoginError", "adminSignupError"].forEach(id => { $(id).style.display = "none"; });
+  ["loginError", "adminLoginError"].forEach(id => { $(id).style.display = "none"; });
 }
 
 function showLoginErr(id, msg) {
@@ -2323,6 +2332,7 @@ async function doAdminSignup() {
     saveToken(res.token);   // stay signed in across reloads
     saveEmail(email);       // remember email for faster re-login
     offerSavePassword(email, password, res.name);  // ask browser to save the password
+    $("signupModal").hidden = true;  // close the create-account popup
     enterApp(res);
   } catch (err) {
     showLoginErr("adminSignupError", "Error: " + (err && err.message ? err.message : err));
@@ -2343,6 +2353,7 @@ function logout() {
   ["adminLoginEmail", "adminLoginPassword", "adminSignupName", "adminSignupEmail", "adminSignupPassword"]
     .forEach(id => { $(id).value = ""; });
   $("adminModal").hidden = true;
+  $("signupModal").hidden = true;
   $("manageBtn").hidden = true;
   showLoginView("pin");
   $("loginOverlay").hidden = false;
@@ -2685,8 +2696,15 @@ $("toAdminLogin").addEventListener("click", () => {
   ($("adminLoginEmail").value ? $("adminLoginPassword") : $("adminLoginEmail")).focus();
 });
 $("backToPin").addEventListener("click", () => { showLoginView("pin"); $("loginPin").focus(); });
-$("toAdminSignup").addEventListener("click", () => { showLoginView("adminSignup"); $("adminSignupName").focus(); });
-$("backToAdminLogin").addEventListener("click", () => { showLoginView("adminLogin"); });
+// "Create an account" opens a popup (not a full-page view swap).
+$("toAdminSignup").addEventListener("click", () => {
+  $("adminSignupError").style.display = "none";
+  ["adminSignupName", "adminSignupEmail", "adminSignupPassword"].forEach(id => { $(id).value = ""; });
+  $("signupModal").hidden = false;
+  try { $("adminSignupName").focus({ preventScroll: true }); } catch (e) { $("adminSignupName").focus(); }
+});
+$("signupCancel").addEventListener("click", () => { $("signupModal").hidden = true; });
+$("signupClose").addEventListener("click", () => { $("signupModal").hidden = true; });
 $("adminLoginForm").addEventListener("submit", (e) => { e.preventDefault(); doAdminLogin(); });
 $("adminSignupForm").addEventListener("submit", (e) => { e.preventDefault(); doAdminSignup(); });
 

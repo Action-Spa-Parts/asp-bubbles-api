@@ -2,7 +2,7 @@
 // the app opens instantly and survives a flaky connection. API data is always
 // fetched live (never cached).
 
-const CACHE = "asp-bubbles-v35";
+const CACHE = "asp-bubbles-v36";
 const SHELL = [
   "./",
   "./index.html",
