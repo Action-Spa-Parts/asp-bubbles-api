@@ -160,6 +160,23 @@
   .tab .ticon { font-size: 26px; line-height: 1; }
   .tab:hover { background: rgba(30,58,138,0.04); }
   .tab.active { color: var(--accent); border-top-color: var(--accent); background: rgba(30,58,138,0.05); }
+
+  /* Read-only checklist */
+  .cl-tv-banner { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); padding:20px 26px; font-size:24px; margin-bottom:20px; }
+  .cl-tv-banner.done { border-color:#bbf7d0; background:linear-gradient(90deg,#f0fdf4,#fff 60%); color:var(--good); }
+  .cl-tv-banner.pending { border-color:#fde68a; }
+  .cl-tv-cat { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); padding:18px 24px; margin-bottom:16px; }
+  .cl-tv-cat .ctitle { font-size:15px; text-transform:uppercase; letter-spacing:.08em; color:var(--accent); font-weight:700; margin-bottom:12px; }
+  .cl-tv-item { display:flex; align-items:center; gap:14px; padding:11px 0; font-size:22px; border-bottom:1px dashed var(--border); }
+  .cl-tv-item:last-child { border-bottom:none; }
+  .cl-tv-item .cl-tv-box { font-size:24px; flex-shrink:0; }
+  .cl-tv-item.on .cl-tv-txt { color:var(--muted); }
+  .cl-tv-hist { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); padding:6px 24px; }
+  .cl-tv-hrow { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:15px 0; border-bottom:1px dashed var(--border); font-size:20px; }
+  .cl-tv-hrow:last-child { border-bottom:none; }
+  .cl-tv-status { font-size:16px; font-weight:700; white-space:nowrap; }
+  .cl-tv-status.done { color:var(--good); }
+  .cl-tv-status.miss { color:var(--danger); }
 </style>
 </head>
 <body>
@@ -211,12 +228,19 @@
       <h2 class="section">How to earn bubbles</h2>
       <div class="earn-grid" id="earn"></div>
     </div>
+
+    <!-- Checklist (read-only) -->
+    <div class="view" id="view-checklist" hidden>
+      <h2 class="section">End-of-day checklist</h2>
+      <div id="clBody"></div>
+    </div>
   </main>
 
   <nav class="tabs">
     <button class="tab active" data-view="board"><span class="ticon">★</span><span>Leaderboard</span></button>
     <button class="tab" data-view="activity"><span class="ticon">🧾</span><span>Activity</span></button>
     <button class="tab" data-view="earn"><span class="ticon">＋</span><span>How to earn</span></button>
+    <button class="tab" data-view="checklist"><span class="ticon">📋</span><span>Checklist</span></button>
   </nav>
 </div>
 
@@ -229,7 +253,7 @@ const REFRESH_MS = 20000;   // re-pull data every 20s
 const STALE_MS   = 70000;   // if no successful pull in this long, show "reconnecting"
 
 /* ===== State ===== */
-const state = { balances: [], rules: [], activity: [], view: "board", lastOk: 0 };
+const state = { balances: [], rules: [], activity: [], checklist: null, view: "board", lastOk: 0 };
 const $ = (id) => document.getElementById(id);
 
 /* ===== Helpers ===== */
@@ -245,6 +269,15 @@ function fmtDate(ts) {
     " · " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 function num(v) { const n = parseFloat(String(v).replace(/,/g, "")); return isNaN(n) ? 0 : n; }
+function fmtDay(s) {
+  if (!s) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s));
+  const d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(s);
+  if (isNaN(d)) return s;
+  const opts = { weekday: "short", month: "short", day: "numeric" };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString(undefined, opts);
+}
 
 async function apiCall(action, params) {
   const res = await fetch(API_URL, {
@@ -357,16 +390,55 @@ function renderEarn() {
     </div>`).join("");
 }
 
+function clHistoryHtml(history, today) {
+  const h = (history || []).filter(r => r.run_date && r.run_date !== today);
+  if (!h.length) return "";
+  return `<h2 class="section" style="margin-top:28px;">Recent days</h2>
+    <div class="cl-tv-hist">` + h.map(r => {
+      const done = r.status === "completed";
+      return `<div class="cl-tv-hrow">
+        <div>${fmtDay(r.run_date)} — ${escapeHtml(r.assignee || "Unassigned")}</div>
+        <div class="cl-tv-status ${done ? "done" : "miss"}">${done ? "Done" : "Not done"} · ${num(r.checked)}/${num(r.total)}</div>
+      </div>`;
+    }).join("") + `</div>`;
+}
+
+function renderChecklist() {
+  const el = $("clBody");
+  const c = state.checklist;
+  if (!c) { el.innerHTML = `<div class="empty"><h3>Loading…</h3></div>`; return; }
+
+  if (!c.assignee) {
+    el.innerHTML = `<div class="cl-tv-banner">No closing checklist assigned today (it may be a weekend).</div>` + clHistoryHtml(c.history, c.today);
+    return;
+  }
+  const done = c.status === "completed";
+  const banner = `<div class="cl-tv-banner ${done ? "done" : "pending"}"><strong>${escapeHtml(c.assignee)}</strong> is closing up today — ${done ? "checklist complete ✓" : num(c.checked) + " of " + num(c.total) + " done"}</div>`;
+  const byCat = {};
+  (c.items || []).forEach(it => { (byCat[it.category] = byCat[it.category] || []).push(it); });
+  const groups = Object.keys(byCat).map(cat => `
+    <div class="cl-tv-cat">
+      <div class="ctitle">${escapeHtml(cat)}</div>
+      ${byCat[cat].map(it => `
+        <div class="cl-tv-item ${it.checked ? "on" : ""}">
+          <span class="cl-tv-box">${it.checked ? "✅" : "⬜"}</span>
+          <span class="cl-tv-txt">${escapeHtml(it.label)}</span>
+        </div>`).join("")}
+    </div>`).join("");
+  el.innerHTML = banner + groups + clHistoryHtml(c.history, c.today);
+}
+
 function render() {
   renderBoard();
   renderActivity();
   renderEarn();
+  renderChecklist();
 }
 
 /* ===== Tabs ===== */
 function switchView(view) {
   state.view = view;
-  ["board", "activity", "earn"].forEach(v => { $("view-" + v).hidden = (v !== view); });
+  ["board", "activity", "earn", "checklist"].forEach(v => { $("view-" + v).hidden = (v !== view); });
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.view === view));
   // Reset scroll position when switching tabs so the top is always visible.
   document.querySelector("main").scrollTop = 0;
@@ -395,6 +467,7 @@ async function fetchData() {
     state.balances = data.balances || [];
     state.rules    = data.rules || [];
     state.activity = data.activity || [];
+    state.checklist = data.checklist || null;
     state.lastOk   = Date.now();
     $("livePill").classList.remove("stale");
     $("liveText").textContent = "Live";

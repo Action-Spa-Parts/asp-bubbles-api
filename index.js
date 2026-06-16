@@ -412,10 +412,33 @@ async function getPublic() {
        ORDER BY a.created_at DESC
        LIMIT 100`),
   ]);
+
+  // Read-only checklist snapshot for the TV (no flag details — keep it non-shaming).
+  const today = await todayStr();
+  const run = await ensureTodayRun();
+  const checklist = { today, assignee: null, status: null, total: 0, checked: 0, items: [], history: [] };
+  if (run) {
+    checklist.assignee = await nameForEmpId(run.employee_id);
+    checklist.status = run.status;
+    const { rows: items } = await pool.query(
+      `SELECT category, label, checked FROM checklist_items WHERE run_id = $1 ORDER BY sort_order, id`, [run.id]);
+    checklist.items = items;
+    checklist.total = items.length;
+    checklist.checked = items.filter(i => i.checked).length;
+  }
+  const { rows: hist } = await pool.query(`
+    SELECT to_char(r.run_date, 'YYYY-MM-DD') AS run_date, r.status, e.name AS assignee,
+           (SELECT COUNT(*)::int FROM checklist_items ci WHERE ci.run_id = r.id) AS total,
+           (SELECT COUNT(*)::int FROM checklist_items ci WHERE ci.run_id = r.id AND ci.checked) AS checked
+      FROM checklist_runs r LEFT JOIN employees e ON e.id = r.employee_id
+     ORDER BY r.run_date DESC LIMIT 7`);
+  checklist.history = hist;
+
   return {
     balances: balances.rows,
     rules: rules.rows,
     activity: activity.rows,
+    checklist,
   };
 }
 
