@@ -563,6 +563,16 @@
   .cl-arow.flagged .cl-amain { color:var(--danger); }
   .cl-acat { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
 
+  /* Filter bar (activity + checklist) */
+  .filterbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:16px; }
+  .filterbar[hidden] { display:none; }
+  .filterbar label { font-size:12px; color:var(--muted); font-weight:500; }
+  .filterbar select, .filterbar input[type=date] {
+    font:inherit; color:inherit; background:var(--surface);
+    border:1px solid var(--border); border-radius:8px; padding:7px 11px; cursor:pointer;
+  }
+  .filterbar button { padding:7px 11px; font-size:13px; }
+
   /* Phone layout */
   @media (max-width: 600px) {
     .wrap { padding: 16px 12px 48px; }
@@ -709,6 +719,13 @@
   <!-- ===== Activity tab ===== -->
   <div class="view" id="view-activity" hidden>
     <h2 class="section" id="activityHeading">Your transactions</h2>
+    <div class="filterbar" id="activityFilters" hidden>
+      <label for="afName">Name</label>
+      <select id="afName"><option value="">All names</option></select>
+      <label for="afDate">Date</label>
+      <input type="date" id="afDate">
+      <button class="ghost" id="afClear">Clear</button>
+    </div>
     <div id="activityList"></div>
   </div>
 
@@ -1042,6 +1059,8 @@ const state = {
   clAlerted: false,     // whether we've popped the "your turn" alert this load
   flagItemId: null,     // item being flagged
   checkMode: false,     // manager: when on, can tick/untick to correct; otherwise flag-only
+  activityFilter: { name: "", date: "" },  // All-activity filter
+  checklistFilter: { name: "", date: "" }, // Checklist review filter
 };
 
 function normalizeCatalog(rows) {
@@ -1421,28 +1440,62 @@ function fmtDate(ts) {
     " · " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
+// Local-timezone YYYY-MM-DD for a timestamp (matches what the date picker uses).
+function localYMD(ts) {
+  const d = new Date(ts);
+  if (isNaN(d)) return "";
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return d.getFullYear() + "-" + m + "-" + day;
+}
+
+// Fill a <select> with "All …" + distinct sorted names, preserving its value.
+function fillNameOptions(sel, names, allLabel) {
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">${allLabel}</option>` +
+    names.map(n => `<option value="${escapeAttr(n)}">${escapeHtml(n)}</option>`).join("");
+  sel.value = cur;
+}
+
 function renderActivity() {
   const el = $("activityList");
   const heading = $("activityHeading");
+  const filters = $("activityFilters");
 
   if (session.role === "manager") {
-    // Managers see a feed of ALL activity across the team.
+    // Managers see a feed of ALL activity across the team, with name/date filters.
     heading.textContent = "All activity";
-    const items = state.allAwards;
-    if (!items.length) {
+    filters.hidden = false;
+    const all = state.allAwards || [];
+    const names = [...new Set(all.map(a => String(a.Name || "")).filter(Boolean))].sort();
+    fillNameOptions($("afName"), names, "All names");
+    $("afName").value = state.activityFilter.name;
+    $("afDate").value = state.activityFilter.date;
+
+    if (!all.length) {
       el.innerHTML = `<div class="empty"><h3>No activity yet</h3><div>Awards and redemptions across the team will show here.</div></div>`;
       return;
     }
-    // Flag reversal entries and their matched originals so we can grey them out.
+    const fName = state.activityFilter.name;
+    const fDate = state.activityFilter.date;
+    const filtered = all.filter(a =>
+      (!fName || String(a.Name || "") === fName) &&
+      (!fDate || localYMD(a.Timestamp) === fDate));
+    if (!filtered.length) {
+      el.innerHTML = `<div class="empty"><h3>No matches</h3><div>Nothing for that name and/or date. Tap Clear to reset.</div></div>`;
+      return;
+    }
+    // Grey out reversal entries + their matched originals (within the shown set).
     const cancel = {};
-    items.forEach(a => {
+    filtered.forEach(a => {
       const m = String(a.Metric || "");
       if (m.indexOf("Undo:") === 0) {
         const key = a.Name + "|" + m.slice(5).trim() + "|" + (-(Number(a.Amount) || 0));
         cancel[key] = (cancel[key] || 0) + 1;
       }
     });
-    el.innerHTML = items.slice(0, 100).map(a => {
+    el.innerHTML = filtered.slice(0, 300).map(a => {
       const amt = Number(a.Amount) || 0;
       const name = escapeHtml(a.Name || "");
       const metric = String(a.Metric || "");
@@ -1475,6 +1528,7 @@ function renderActivity() {
   }
 
   // Workers see only their own transactions.
+  filters.hidden = true;
   heading.textContent = "Your transactions";
   if (!state.myTransactions.length) {
     el.innerHTML = `<div class="empty"><h3>No transactions yet</h3><div>Bubbles you earn, lose, or redeem will show up here.</div></div>`;
@@ -1725,9 +1779,30 @@ function renderChecklistAdmin() {
     <button class="ghost" id="clRemindBtn">✉ Remind closer now</button>
     <span class="muted" style="font-size:12px;">${state.checkMode ? "You can tick/untick boxes to correct a run." : "Flag-only. Turn on Check mode to fix a missed or wrong check."}</span>
   </div>`;
-  body.innerHTML = toggle + runCardsHtml(data.runs, data.today, { interactive: true, checkMode: state.checkMode });
+
+  const fName = state.checklistFilter.name, fDate = state.checklistFilter.date;
+  const names = [...new Set(data.runs.map(r => String(r.assignee || "")).filter(Boolean))].sort();
+  const filterBar = `<div class="filterbar">
+    <label for="clfName">Name</label>
+    <select id="clfName"><option value="">All names</option>${names.map(n => `<option value="${escapeAttr(n)}"${n === fName ? " selected" : ""}>${escapeHtml(n)}</option>`).join("")}</select>
+    <label for="clfDate">Date</label>
+    <input type="date" id="clfDate" value="${escapeAttr(fDate)}">
+    <button class="ghost" id="clfClear">Clear</button>
+  </div>`;
+
+  const runs = data.runs.filter(r =>
+    (!fName || String(r.assignee || "") === fName) &&
+    (!fDate || r.run_date === fDate));
+  const list = runs.length
+    ? runCardsHtml(runs, data.today, { interactive: true, checkMode: state.checkMode })
+    : `<div class="cl-banner info">No checklists for that name and/or date. Tap Clear to reset.</div>`;
+
+  body.innerHTML = toggle + filterBar + list;
   $("clCheckModeBtn").addEventListener("click", () => { state.checkMode = !state.checkMode; renderChecklistAdmin(); });
   $("clRemindBtn").addEventListener("click", remindNow);
+  $("clfName").addEventListener("change", () => { state.checklistFilter.name = $("clfName").value; renderChecklistAdmin(); });
+  $("clfDate").addEventListener("change", () => { state.checklistFilter.date = $("clfDate").value; renderChecklistAdmin(); });
+  $("clfClear").addEventListener("click", () => { state.checklistFilter = { name: "", date: "" }; renderChecklistAdmin(); });
   wireRunCards(body);
 }
 
@@ -2627,6 +2702,15 @@ $("clTaskSave").addEventListener("click", saveChecklistTask);
 $("clFlagSave").addEventListener("click", saveFlag);
 $("clFlagCancel").addEventListener("click", () => { $("clFlagModal").hidden = true; state.flagItemId = null; });
 $("clFlagClose").addEventListener("click", () => { $("clFlagModal").hidden = true; state.flagItemId = null; });
+
+// All-activity filters (manager).
+$("afName").addEventListener("change", () => { state.activityFilter.name = $("afName").value; renderActivity(); });
+$("afDate").addEventListener("change", () => { state.activityFilter.date = $("afDate").value; renderActivity(); });
+$("afClear").addEventListener("click", () => {
+  state.activityFilter = { name: "", date: "" };
+  $("afName").value = ""; $("afDate").value = "";
+  renderActivity();
+});
 
 // On load, try to silently resume a saved admin session. If there isn't one
 // (or it's expired), fall back to the login screen and focus the PIN field.
