@@ -641,7 +641,7 @@
       <button type="submit" class="primary" style="padding:13px; font-size:15px; font-weight:600;">Sign in</button>
       <div style="display:flex; justify-content:space-between; gap:8px;">
         <button type="button" class="ghost" id="backToPin" style="padding:9px 12px; font-size:13px;">← Use a PIN</button>
-        <button type="button" class="ghost" id="toAdminSignup" style="padding:9px 12px; font-size:13px;">Create an account</button>
+        <button type="button" class="ghost" id="toAdminSignup" style="padding:9px 12px; font-size:13px;">Create an admin account</button>
       </div>
     </form>
 
@@ -2327,6 +2327,15 @@ async function doAdminSignup() {
   try {
     const res = await apiCall("adminSignup", { name: name, email: email, password: password });
     if (res.error) { showLoginErr("adminSignupError", res.error); return; }
+    if (res.pending) {
+      // Needs an existing admin to approve — don't log in.
+      const el = $("adminSignupError");
+      el.style.color = "var(--good)";
+      el.textContent = "Account created! An existing admin must approve it before you can sign in.";
+      el.style.display = "block";
+      ["adminSignupName", "adminSignupEmail", "adminSignupPassword"].forEach(id => { $(id).value = ""; });
+      return;
+    }
     session.token = res.token;
     session.pin = null;
     saveToken(res.token);   // stay signed in across reloads
@@ -2605,8 +2614,27 @@ async function saveEmp() {
 function renderAdminAdmin() {
   const el = $("adminAdminList");
   const admins = state.admin.admins;
+  // Show a pending-request count on the Admins tab so it's noticeable.
+  const pendCount = admins.filter(a => a.pending).length;
+  const atab = document.querySelector('.atab[data-atab="admins"]');
+  if (atab) atab.textContent = pendCount ? "Admins (" + pendCount + ")" : "Admins";
+
   if (!admins.length) { el.innerHTML = `<div class="muted" style="font-size:13px;">No admin accounts yet.</div>`; return; }
-  el.innerHTML = admins.map(a => `
+  el.innerHTML = admins.map(a => {
+    if (a.pending) {
+      return `
+        <div class="arow">
+          <div class="ainfo">
+            <div class="atitle">${escapeHtml(a.name)}<span class="badge" style="background:#fef9c3;color:#854d0e;">Pending approval</span></div>
+            <div class="asub">${escapeHtml(a.email)} · wants admin access</div>
+          </div>
+          <div class="aactions">
+            <button class="primary" data-approve="${a.id}">Approve</button>
+            <button class="ghost" data-deny="${a.id}">Deny</button>
+          </div>
+        </div>`;
+    }
+    return `
       <div class="arow ${a.active ? "" : "inactive"}">
         <div class="ainfo">
           <div class="atitle">${escapeHtml(a.name)}${a.active ? "" : `<span class="badge off">Off</span>`}</div>
@@ -2616,9 +2644,12 @@ function renderAdminAdmin() {
           <button class="ghost" data-edit="${a.id}">Edit</button>
           <button class="ghost" data-toggle="${a.id}" data-active="${a.active ? 0 : 1}">${a.active ? "Deactivate" : "Reactivate"}</button>
         </div>
-      </div>`).join("");
+      </div>`;
+  }).join("");
   el.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => editAdmin(parseInt(b.dataset.edit, 10))));
   el.querySelectorAll("[data-toggle]").forEach(b => b.addEventListener("click", () => adminSave("setAdminActive", { id: parseInt(b.dataset.toggle, 10), active: b.dataset.active === "1" })));
+  el.querySelectorAll("[data-approve]").forEach(b => b.addEventListener("click", () => adminSave("approveAdmin", { id: parseInt(b.dataset.approve, 10) })));
+  el.querySelectorAll("[data-deny]").forEach(b => b.addEventListener("click", () => adminSave("denyAdmin", { id: parseInt(b.dataset.deny, 10) })));
 }
 function showAdminForm(a) {
   $("adminFormTitle").textContent = a ? "Edit admin" : "New admin";
@@ -2698,7 +2729,9 @@ $("toAdminLogin").addEventListener("click", () => {
 $("backToPin").addEventListener("click", () => { showLoginView("pin"); $("loginPin").focus(); });
 // "Create an account" opens a popup (not a full-page view swap).
 $("toAdminSignup").addEventListener("click", () => {
-  $("adminSignupError").style.display = "none";
+  const err = $("adminSignupError");
+  err.style.display = "none";
+  err.style.color = "var(--danger)";
   ["adminSignupName", "adminSignupEmail", "adminSignupPassword"].forEach(id => { $(id).value = ""; });
   $("signupModal").hidden = false;
   try { $("adminSignupName").focus({ preventScroll: true }); } catch (e) { $("adminSignupName").focus(); }

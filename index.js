@@ -81,6 +81,8 @@ async function ensureSchema() {
       expires_at TIMESTAMPTZ NOT NULL
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS admin_sessions_admin_idx ON admin_sessions(admin_id)`);
+  // Self-signups start pending until an existing admin approves them.
+  await pool.query(`ALTER TABLE admins ADD COLUMN IF NOT EXISTS pending BOOLEAN NOT NULL DEFAULT false`);
 
   // End-of-day warehouse checklist: task definitions, daily runs (one assigned
   // worker per day), and per-task results (with admin flags).
@@ -862,7 +864,7 @@ async function setEmployeeActive(who, id, active) {
 
 // Shared create path used by both public self-signup and manager "add admin".
 // Returns { id, name } on success or { error } on failure.
-async function createAdminRow(name, email, password) {
+async function createAdminRow(name, email, password, pending) {
   const nm = String(name || '').trim();
   const em = normalizeEmail(email);
   const pw = String(password == null ? '' : password);
@@ -872,9 +874,10 @@ async function createAdminRow(name, email, password) {
   const dup = await pool.query('SELECT 1 FROM admins WHERE lower(email) = $1', [em]);
   if (dup.rows.length) return { error: 'An admin with that email already exists' };
   const { salt, hash } = hashPassword(pw);
+  const isPending = !!pending;
   const { rows } = await pool.query(
-    `INSERT INTO admins (name, email, pw_salt, pw_hash) VALUES ($1, $2, $3, $4) RETURNING id`,
-    [nm, em, salt, hash]
+    `INSERT INTO admins (name, email, pw_salt, pw_hash, active, pending) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [nm, em, salt, hash, !isPending, isPending]   // pending accounts are inactive until approved
   );
   return { id: rows[0].id, name: nm };
 }
@@ -885,10 +888,17 @@ async function createAdminRow(name, email, password) {
 // and add a Manager-PIN field to the create-account form.)
 async function adminSignup(body) {
   body = body || {};
-  const res = await createAdminRow(body.name, body.email, body.password);
+  // The very first admin bootstraps the system (auto-approved + logged in).
+  // Everyone after must be approved by an existing admin (or the Manager PIN).
+  const { rows: c } = await pool.query('SELECT COUNT(*)::int AS n FROM admins');
+  const isFirst = c[0].n === 0;
+  const res = await createAdminRow(body.name, body.email, body.password, !isFirst);
   if (res.error) return res;
-  const token = await createSession(res.id);
-  return { role: 'manager', name: res.name, token };
+  if (isFirst) {
+    const token = await createSession(res.id);
+    return { role: 'manager', name: res.name, token };
+  }
+  return { ok: true, pending: true, name: res.name };
 }
 
 async function adminLogin(body) {
@@ -915,8 +925,24 @@ async function adminLogout(body) {
 async function listAdmins(who) {
   if (!isManager(who)) return { error: 'Manager only' };
   const { rows } = await pool.query(
-    `SELECT id, name, email, active FROM admins ORDER BY active DESC, name`);
+    `SELECT id, name, email, active, pending FROM admins ORDER BY pending DESC, active DESC, name`);
   return { admins: rows };
+}
+
+async function approveAdmin(who, id) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const aid = cleanInt(id);
+  if (aid === null) return { error: 'Bad admin id' };
+  await pool.query(`UPDATE admins SET pending = false, active = true WHERE id = $1 AND pending = true`, [aid]);
+  return { ok: true };
+}
+
+async function denyAdmin(who, id) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const aid = cleanInt(id);
+  if (aid === null) return { error: 'Bad admin id' };
+  await pool.query(`DELETE FROM admins WHERE id = $1 AND pending = true`, [aid]);
+  return { ok: true };
 }
 
 async function addAdmin(who, a) {
@@ -1355,6 +1381,8 @@ app.post('/', async (req, res) => {
         case 'addAdmin':          out = await addAdmin(who, body.admin); break;
         case 'updateAdmin':       out = await updateAdmin(who, body.admin); break;
         case 'setAdminActive':    out = await setAdminActive(who, body.id, body.active); break;
+        case 'approveAdmin':      out = await approveAdmin(who, body.id); break;
+        case 'denyAdmin':         out = await denyAdmin(who, body.id); break;
         // ----- End-of-day checklist -----
         case 'getChecklist':         out = await getChecklist(who); break;
         case 'submitChecklist':      out = await submitChecklist(who); break;
