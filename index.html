@@ -334,6 +334,12 @@
     border-radius: 6px; padding: 2px 8px; cursor: pointer;
   }
   .undo-btn:hover { color: var(--danger); border-color: var(--danger); }
+  .del-btn {
+    font-size: 12px; line-height: 1; color: var(--muted);
+    background: none; border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 8px; cursor: pointer;
+  }
+  .del-btn:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
 
   .note {
     background: #fff7ed;
@@ -1530,15 +1536,20 @@ function renderActivity() {
         label = "Gave " + name + " " + amt + (metric ? " for " + escapeHtml(metric) : "");
       }
       const tag = cancelled ? ` <span class="muted" style="font-size:11px;">(reversed)</span>` : "";
+      const delBtn = a.Id ? `<button class="del-btn" data-del="${a.Id}" title="Delete this entry">🗑</button>` : "";
       return `
         <div class="txn-row${cancelled ? " cancelled" : ""}">
           <div>
             <div class="tlabel">${label}${tag}</div>
             <div class="tdate">${fmtDate(a.Timestamp)}${a.By ? " · by " + escapeHtml(a.By) : ""}</div>
           </div>
-          <div class="tamt ${amt < 0 ? "neg" : "pos"}">${amt > 0 ? "+" : ""}${amt.toLocaleString()}</div>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div class="tamt ${amt < 0 ? "neg" : "pos"}">${amt > 0 ? "+" : ""}${amt.toLocaleString()}</div>
+            ${delBtn}
+          </div>
         </div>`;
     }).join("");
+    el.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => deleteTransaction(parseInt(b.dataset.del, 10))));
     return;
   }
 
@@ -2060,12 +2071,13 @@ function renderAwardHistory(name) {
     const undoBtn = canUndo
       ? `<button class="undo-btn" data-metric="${escapeAttr(m)}" data-amount="${amt}">undo</button>`
       : "";
+    const delBtn = (isManager && a.Id) ? `<button class="del-btn" data-del="${a.Id}" title="Delete this entry">🗑</button>` : "";
     return `
       <div class="log-entry">
         <span>${escapeHtml(m || "Adjustment")} <span class="muted" style="font-size: 12px;">• ${fmtDate(a.Timestamp)}</span></span>
         <span style="display:flex; align-items:center; gap:8px;">
           <span class="ldelta ${amt < 0 ? "neg" : "pos"}">${amt > 0 ? "+" : ""}${amt}</span>
-          ${undoBtn}
+          ${undoBtn}${delBtn}
         </span>
       </div>`;
   }).join("");
@@ -2079,6 +2091,31 @@ function renderAwardHistory(name) {
         () => undoAward(name, metric, amount));
     });
   });
+  el.querySelectorAll(".del-btn").forEach(btn => {
+    btn.addEventListener("click", () => deleteTransaction(parseInt(btn.dataset.del, 10)));
+  });
+}
+
+// Delete a ledger entry (manager). Pair-aware on the server: an undone award and
+// its undo are removed together.
+function deleteTransaction(id) {
+  askConfirm("Delete this entry from the history? If it was an award that was undone, both the credit and the undo are removed. This can't be undone.",
+    () => doDeleteTransaction(id));
+}
+async function doDeleteTransaction(id) {
+  try {
+    const res = await apiCall("deleteAward", { pin: session.pin, id: id });
+    if (res.error) { alert(res.error); return; }
+    await fetchData();   // refresh balances + activity, re-render main views
+    if (!$("award").hidden) {  // award modal open → refresh its log + balance
+      const nm = $("aName").textContent;
+      const e = state.employees.find(x => x.name === nm);
+      if (e) $("aBal").textContent = e.balance.toLocaleString();
+      renderAwardHistory(nm);
+    }
+  } catch (err) {
+    alert("Error: " + (err && err.message ? err.message : err));
+  }
 }
 
 // Simple reusable confirm dialog.

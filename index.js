@@ -366,7 +366,7 @@ async function getData(who) {
       : Promise.resolve({ rows: [] }),
     isManager
       ? pool.query(`
-          SELECT a.created_at AS "Timestamp", e.name AS "Name",
+          SELECT a.id AS "Id", a.created_at AS "Timestamp", e.name AS "Name",
                  a.metric AS "Metric", a.amount AS "Amount", a.awarded_by AS "By"
             FROM awards a JOIN employees e ON e.id = a.employee_id
            ORDER BY a.created_at DESC
@@ -558,6 +558,24 @@ async function reverseAward(who, name, metric, amount) {
   );
 
   return { ok: true };
+}
+
+// Permanently delete a ledger entry (manager only). Pair-aware: deleting an
+// award that was undone (or deleting the undo itself) removes BOTH rows, so an
+// accidental credit-then-undo disappears cleanly. Deleting a standalone entry
+// adjusts the balance accordingly (it's as if it never happened).
+async function deleteAward(who, id) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const aid = cleanInt(id);
+  if (aid === null) return { error: 'Bad entry id' };
+  const { rows } = await pool.query('SELECT reversed_by_id FROM awards WHERE id = $1', [aid]);
+  if (!rows.length) return { error: 'Entry not found' };
+  const ids = [aid];
+  if (rows[0].reversed_by_id != null) ids.push(rows[0].reversed_by_id);   // this row was undone → also drop its undo
+  const { rows: rev } = await pool.query('SELECT id FROM awards WHERE reversed_by_id = $1', [aid]);
+  rev.forEach(r => ids.push(r.id));                                       // this row IS an undo → also drop the original
+  const del = await pool.query('DELETE FROM awards WHERE id = ANY($1)', [ids]);
+  return { ok: true, deleted: del.rowCount };
 }
 
 async function requestRedemption(who, rewardName) {
@@ -1289,6 +1307,7 @@ app.post('/', async (req, res) => {
         case 'award':     out = await awardBubbles(who, body.name, body.metric, body.amount); break;
         case 'awardTeam': out = await awardTeam(who, body.metric, body.amount); break;
         case 'undo':      out = await reverseAward(who, body.name, body.metric, body.amount); break;
+        case 'deleteAward': out = await deleteAward(who, body.id); break;
         case 'request':   out = await requestRedemption(who, body.reward); break;
         case 'resolve':   out = await resolveRedemption(who, body.row, body.approve); break;
         case 'fulfill':   out = await fulfillRedemption(who, body.row); break;
