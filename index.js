@@ -947,8 +947,7 @@ async function setAdminActive(who, id, active) {
 const BIZ_DATE = "(now() AT TIME ZONE 'America/Los_Angeles')::date";
 
 // Days of week with no closing checklist (office closed). 0 = Sunday, 6 = Saturday.
-// Add 6 here to also skip Saturdays.
-const CLOSED_DOWS = [0];
+const CLOSED_DOWS = [0, 6];
 
 async function nameForEmpId(id) {
   if (id == null) return null;
@@ -1156,6 +1155,15 @@ async function setChecklistTaskActive(who, id, active) {
   return { ok: true };
 }
 
+// Clean reset: clear all not-yet-completed runs (e.g. launch/test data) and
+// freshly assign today. Completed history is preserved. Manager only.
+async function resetChecklist(who) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  await pool.query("DELETE FROM checklist_runs WHERE status = 'pending'");
+  const run = await ensureTodayRun();
+  return { ok: true, assignee: run ? await nameForEmpId(run.employee_id) : null };
+}
+
 // =================================================================
 // HTTP server
 // =================================================================
@@ -1247,6 +1255,7 @@ app.post('/', async (req, res) => {
         case 'addChecklistTask':     out = await addChecklistTask(who, body.task); break;
         case 'updateChecklistTask':  out = await updateChecklistTask(who, body.task); break;
         case 'setChecklistTaskActive': out = await setChecklistTaskActive(who, body.id, body.active); break;
+        case 'resetChecklist':       out = await resetChecklist(who); break;
         default:                  out = { error: 'Unknown action: ' + action };
       }
     }
