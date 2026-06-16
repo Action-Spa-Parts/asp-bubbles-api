@@ -486,7 +486,7 @@
   .admin-form .ftitle { font-weight:600; font-size:14px; margin-bottom:12px; }
   .admin-form .field { display:flex; flex-direction:column; gap:5px; margin-bottom:11px; }
   .admin-form .field label { font-size:12px; color:var(--muted); font-weight:500; }
-  .admin-form .field input { width:100%; min-width:0; }
+  .admin-form .field input, .admin-form .field select { width:100%; min-width:0; }
   .admin-form .row2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   .admin-form .checkrow { display:flex; align-items:center; gap:9px; margin:4px 0 12px; }
   .admin-form .checkrow input { width:auto; min-width:0; }
@@ -858,7 +858,10 @@
           <div class="field"><label>Name (what they did)</label><input type="text" id="ruleMetric" placeholder="e.g. Top picker"></div>
           <div class="row2">
             <div class="field"><label>Bubbles (use a minus sign for penalties)</label><input type="number" id="ruleBubbles" step="1" placeholder="10"></div>
-            <div class="field"><label>Category</label><input type="text" id="ruleCategory" placeholder="Productivity"></div>
+            <div class="field"><label>Category</label>
+              <select id="ruleCategory"></select>
+              <input type="text" id="ruleCategoryNew" placeholder="New category name" hidden style="margin-top:6px;">
+            </div>
           </div>
           <div class="field"><label>Description (optional)</label><input type="text" id="ruleDesc" placeholder="Short explanation"></div>
           <div class="checkrow"><input type="checkbox" id="ruleTeam"><label for="ruleTeam">Whole-team rule (appears under “Award whole team”)</label></div>
@@ -2446,24 +2449,57 @@ function renderRuleAdmin() {
   el.querySelectorAll("[data-toggle]").forEach(b => b.addEventListener("click", () => adminSave("setRuleActive", { id: parseInt(b.dataset.toggle, 10), active: b.dataset.active === "1" })));
 }
 
+// Reveal an admin form: show it, scroll it into view (the Manage modal scrolls),
+// and focus the first field — so Edit jumps you to the form instead of leaving
+// you scrolled down in the list.
+function revealAdminForm(formId, focusId) {
+  const f = $(formId);
+  f.hidden = false;
+  f.scrollIntoView({ behavior: "smooth", block: "start" });
+  const fld = focusId && $(focusId);
+  if (fld) { try { fld.focus({ preventScroll: true }); } catch (e) { fld.focus(); } }
+}
+
+// Fill the rule category <select> with existing categories + an "add new" option.
+function fillRuleCategorySelect(current) {
+  const sel = $("ruleCategory");
+  const set = new Set((state.admin.rules || []).map(r => String(r.category || "").trim()).filter(Boolean));
+  if (current) set.add(current);
+  const list = [...set].sort();
+  sel.innerHTML = list.map(c => `<option value="${escapeAttr(c)}">${escapeHtml(c)}</option>`).join("")
+    + `<option value="__new__">＋ Add new category…</option>`;
+  sel.value = (current && set.has(current)) ? current : (list.length ? list[0] : "__new__");
+  onRuleCategoryChange();
+}
+
+// Show the new-category text box only when "Add new category…" is selected.
+function onRuleCategoryChange() {
+  const isNew = $("ruleCategory").value === "__new__";
+  $("ruleCategoryNew").hidden = !isNew;
+  if (isNew) { try { $("ruleCategoryNew").focus({ preventScroll: true }); } catch (e) {} }
+}
+
 function showRuleForm(rule) {
   $("ruleFormTitle").textContent = rule ? "Edit earn rule" : "New earn rule";
   $("ruleId").value = rule ? rule.id : "";
   $("ruleMetric").value = rule ? rule.metric : "";
   $("ruleBubbles").value = rule ? rule.bubbles : "";
-  $("ruleCategory").value = rule ? (rule.category || "") : "";
+  $("ruleCategoryNew").value = "";
+  fillRuleCategorySelect(rule ? (rule.category || "") : "");
   $("ruleDesc").value = rule ? (rule.description || "") : "";
   $("ruleTeam").checked = rule ? !!rule.teamWide : false;
   adminError("");
-  $("ruleForm").hidden = false;
+  revealAdminForm("ruleForm", "ruleMetric");
 }
 function editRule(id) { const r = state.admin.rules.find(x => x.id === id); if (r) showRuleForm(r); }
 async function saveRule() {
+  let category = $("ruleCategory").value;
+  if (category === "__new__") category = $("ruleCategoryNew").value.trim();
   const payload = {
     id: $("ruleId").value || undefined,
     metric: $("ruleMetric").value,
     bubbles: $("ruleBubbles").value,
-    category: $("ruleCategory").value,
+    category: category,
     description: $("ruleDesc").value,
     teamWide: $("ruleTeam").checked,
   };
@@ -2499,7 +2535,7 @@ function showRewardForm(r) {
   $("rewardCost").value = r ? r.cost : "";
   $("rewardDesc").value = r ? (r.description || "") : "";
   adminError("");
-  $("rewardForm").hidden = false;
+  revealAdminForm("rewardForm", "rewardName");
 }
 function editReward(id) { const r = state.admin.rewards.find(x => x.id === id); if (r) showRewardForm(r); }
 async function saveReward() {
@@ -2540,7 +2576,7 @@ function showEmpForm(e) {
   $("empStart").value = e ? e.startingBalance : "0";
   $("empEmail").value = e ? (e.email || "") : "";
   adminError("");
-  $("empForm").hidden = false;
+  revealAdminForm("empForm", "empName");
 }
 function editEmp(id) { const e = state.admin.employees.find(x => x.id === id); if (e) showEmpForm(e); }
 async function saveEmp() {
@@ -2581,7 +2617,7 @@ function showAdminForm(a) {
   $("adminFormPassword").value = "";
   $("adminFormPwLabel").textContent = a ? "New password (blank = keep current)" : "Password (8+ characters)";
   adminError("");
-  $("adminForm").hidden = false;
+  revealAdminForm("adminForm", "adminFormName");
 }
 function editAdmin(id) { const a = state.admin.admins.find(x => x.id === id); if (a) showAdminForm(a); }
 async function saveAdmin() {
@@ -2620,7 +2656,7 @@ function showChecklistTaskForm(t) {
   $("clTaskCategory").value = t ? (t.category || "") : "";
   $("clTaskSort").value = t ? t.sortOrder : "";
   adminError("");
-  $("clTaskForm").hidden = false;
+  revealAdminForm("clTaskForm", "clTaskLabel");
 }
 function editChecklistTask(id) { const t = state.admin.checklistTasks.find(x => x.id === id); if (t) showChecklistTaskForm(t); }
 async function saveChecklistTask() {
@@ -2687,6 +2723,7 @@ $("manageBtn").addEventListener("click", openAdmin);
 $("adminClose").addEventListener("click", () => { $("adminModal").hidden = true; });
 document.querySelectorAll(".atab").forEach(b => b.addEventListener("click", () => switchAdminTab(b.dataset.atab)));
 $("ruleAddBtn").addEventListener("click", () => showRuleForm(null));
+$("ruleCategory").addEventListener("change", onRuleCategoryChange);
 $("ruleCancel").addEventListener("click", () => { $("ruleForm").hidden = true; adminError(""); });
 $("ruleSave").addEventListener("click", saveRule);
 $("rewardAddBtn").addEventListener("click", () => showRewardForm(null));
