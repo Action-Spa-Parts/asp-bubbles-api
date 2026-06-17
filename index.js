@@ -1360,6 +1360,16 @@ async function updateBoxSize(who, body) {
   return await getBoxSizes(who);
 }
 
+// Remove (or restore) a box size — managers only. Soft delete: active=false
+// hides it from both tabs but keeps the row.
+async function setBoxSizeActive(who, id, active) {
+  if (!isManager(who)) return { error: 'Only a manager can remove box sizes.' };
+  const bid = parseInt(id, 10);
+  if (!Number.isFinite(bid)) return { error: 'Bad id.' };
+  await pool.query('UPDATE box_sizes SET active = $1 WHERE id = $2', [!!active, bid]);
+  return await getBoxSizes(who);
+}
+
 app.post('/', async (req, res) => {
   let body;
   try {
@@ -1423,6 +1433,7 @@ app.post('/', async (req, res) => {
         case 'getBoxSizes':   out = await getBoxSizes(who); break;
         case 'saveBoxCount':  out = await saveBoxCount(who, body); break;
         case 'updateBoxSize': out = await updateBoxSize(who, body); break;
+        case 'setBoxSizeActive': out = await setBoxSizeActive(who, body.id, body.active); break;
         default:                  out = { error: 'Unknown action: ' + action };
       }
     }

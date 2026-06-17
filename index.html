@@ -1928,6 +1928,7 @@ async function saveBoxCountNow() {
 function renderBoxSizes() {
   const el = $("bcSizesList");
   if (!state.boxSizes.length) { el.innerHTML = `<div class="empty"><h3>No box sizes</h3></div>`; return; }
+  const canManage = session.role === "manager";
   el.innerHTML = state.boxSizes.map(s => {
     const flag = bcFlag(s, Number(s.quantity));
     const last = s.lastCountedAt ? "Counted " + fmtDate(s.lastCountedAt) : "Not counted yet";
@@ -1943,12 +1944,29 @@ function renderBoxSizes() {
         <div class="bc-field"><label>Low ≤</label>
           <input class="bc-num" inputmode="numeric" pattern="[0-9]*" data-bcthresh="${s.id}"
                  value="${s.lowThreshold == null ? "" : Number(s.lowThreshold)}" placeholder="—"></div>
+        ${canManage ? `<button class="del-btn" data-bcremove="${s.id}" data-bcsize="${escapeAttr(s.size)}" title="Remove ${escapeAttr(s.size)}">🗑</button>` : ""}
       </div>`;
   }).join("");
   el.querySelectorAll("[data-bcqty]").forEach(inp =>
     inp.addEventListener("change", () => commitBoxSize(parseInt(inp.dataset.bcqty, 10), { quantity: inp.value })));
   el.querySelectorAll("[data-bcthresh]").forEach(inp =>
     inp.addEventListener("change", () => commitBoxSize(parseInt(inp.dataset.bcthresh, 10), { lowThreshold: inp.value.trim() === "" ? null : inp.value.trim() })));
+  el.querySelectorAll("[data-bcremove]").forEach(b =>
+    b.addEventListener("click", () => removeBoxSize(parseInt(b.dataset.bcremove, 10), b.dataset.bcsize)));
+}
+
+// Manager-only: remove a box size (soft delete — disappears from both tabs).
+function removeBoxSize(id, size) {
+  askConfirm(`Remove box size ${size}? It will no longer show on the count or inventory.`, async () => {
+    try {
+      const res = await apiCall("setBoxSizeActive", { pin: session.pin, id: id, active: false });
+      if (res.error) { alert(res.error); return; }
+      if (res.boxSizes) state.boxSizes = res.boxSizes;
+      renderBox();
+    } catch (err) {
+      alert("Error: " + (err && err.message ? err.message : err));
+    }
+  }, { okText: "Remove" });
 }
 
 async function commitBoxSize(id, fields) {
