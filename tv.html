@@ -204,6 +204,7 @@
   .bc-search input { width:74px; padding:10px; text-align:center; font-size:22px; border:1px solid var(--border); border-radius:10px; font-family:inherit; }
   .bc-search button { font:inherit; font-size:16px; font-weight:600; padding:10px 18px; border:1px solid var(--border); border-radius:10px; background:var(--surface); cursor:pointer; color:var(--text); }
   .bc-search button:hover { background:rgba(30,58,138,0.05); }
+  .bc-search select { font:inherit; font-size:16px; font-weight:600; padding:10px 14px; border:1px solid var(--border); border-radius:10px; background:var(--surface); color:var(--text); cursor:pointer; }
   .bc-x { color:var(--muted); }
   .bc-list { display:grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap:14px; align-items:start; }
   .bc-card { display:flex; justify-content:space-between; align-items:center; gap:12px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); padding:16px 20px; }
@@ -310,6 +311,11 @@
         <span class="bc-x">×</span>
         <input inputmode="numeric" pattern="[0-9]*" data-bcsearch="h" placeholder="H" aria-label="Height">
         <button id="bcSearchClear">Clear</button>
+        <select id="bcSort" aria-label="Sort">
+          <option value="default">Sort: by size</option>
+          <option value="low">Lowest count first</option>
+          <option value="high">Highest count first</option>
+        </select>
       </div>
       <div id="bcList" class="bc-list"></div>
     </div>
@@ -333,7 +339,7 @@ const REFRESH_MS = 20000;   // re-pull data every 20s
 const STALE_MS   = 70000;   // if no successful pull in this long, show "reconnecting"
 
 /* ===== State ===== */
-const state = { balances: [], rules: [], activity: [], checklist: null, boxSizes: [], boxSearch: { l: "", w: "", h: "" }, screen: "home", view: "board", lastOk: 0 };
+const state = { balances: [], rules: [], activity: [], checklist: null, boxSizes: [], boxSearch: { l: "", w: "", h: "" }, boxSort: "default", screen: "home", view: "board", lastOk: 0 };
 const $ = (id) => document.getElementById(id);
 
 /* ===== Helpers ===== */
@@ -512,13 +518,15 @@ function renderBoxList() {
   const el = $("bcList"); if (!el) return;
   if (!state.boxSizes || !state.boxSizes.length) { el.innerHTML = `<div class="empty"><h3>Loading…</h3></div>`; return; }
   const f = state.boxSearch;
-  const list = state.boxSizes.filter(s => {
+  let list = state.boxSizes.filter(s => {
     const d = String(s.size).toLowerCase().split("x").map(n => parseInt(n, 10));
     if (f.l !== "" && d[0] !== parseInt(f.l, 10)) return false;
     if (f.w !== "" && d[1] !== parseInt(f.w, 10)) return false;
     if (f.h !== "" && d[2] !== parseInt(f.h, 10)) return false;
     return true;
   });
+  if (state.boxSort === "low") list = list.slice().sort((a, b) => num(a.quantity) - num(b.quantity));
+  else if (state.boxSort === "high") list = list.slice().sort((a, b) => num(b.quantity) - num(a.quantity));
   if (!list.length) { el.innerHTML = `<div class="empty"><h3>No matches</h3><div>Nothing for that size. Tap Clear.</div></div>`; return; }
   el.innerHTML = list.map(s => {
     const q = num(s.quantity);
@@ -599,6 +607,7 @@ $("bcSearchClear").addEventListener("click", () => {
   document.querySelectorAll("[data-bcsearch]").forEach(i => i.value = "");
   renderBoxList();
 });
+$("bcSort").addEventListener("change", () => { state.boxSort = $("bcSort").value; renderBoxList(); });
 
 /* ===== Auto-rotate (unattended TV) =====
    Cycle Bubbles ↔ Closing Checklist every minute. Any tap/keypress pauses the
