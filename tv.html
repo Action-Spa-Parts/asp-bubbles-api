@@ -486,9 +486,12 @@ function render() {
   const ct = $("clTileDesc");
   if (ct) {
     const c = state.checklist;
-    ct.textContent = (c && c.assignee)
-      ? (c.status === "completed" ? "Today: " + c.assignee + " ✓" : "Today: " + c.assignee)
-      : "End-of-day tasks";
+    if (c && c.assignee) {
+      const who = '<span style="font-weight:700; text-decoration:underline;">' + escapeHtml(c.assignee) + '</span>';
+      ct.innerHTML = "Today: " + who + (c.status === "completed" ? " ✓" : "");
+    } else {
+      ct.textContent = "End-of-day tasks";
+    }
   }
 }
 
