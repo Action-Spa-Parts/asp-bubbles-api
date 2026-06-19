@@ -186,6 +186,7 @@
   .tv-homebtn:hover { background: var(--accent-soft); }
   .tv-signin { font: inherit; font-size: 20px; font-weight: 700; color: #fff; background: var(--accent); border: none; border-radius: 12px; padding: 12px 24px; cursor: pointer; box-shadow: var(--shadow-card); }
   .tv-signin:hover { filter: brightness(1.08); }
+  .tv-ver { color: var(--muted); font-size: 13px; margin-top: 4px; }
   .tv-home { max-width: 1000px; margin: 0 auto; text-align: center; padding-top: 40px; }
   .tv-herologo { width: 104px; height: 104px; border-radius: 26px; box-shadow: var(--shadow-card); }
   .tv-herotitle { font-size: 46px; font-weight: 900; letter-spacing: -0.02em; margin-top: 18px; }
@@ -248,6 +249,7 @@
     <div class="meta">
       <div class="clock" id="clock">—</div>
       <div class="live" id="livePill"><span class="dot"></span><span id="liveText">Connecting…</span></div>
+      <div class="tv-ver" id="tvVer"></div>
     </div>
   </header>
 
@@ -342,7 +344,7 @@ const REFRESH_MS = 20000;   // re-pull data every 20s
 const STALE_MS   = 70000;   // if no successful pull in this long, show "reconnecting"
 
 /* ===== State ===== */
-const state = { balances: [], rules: [], activity: [], checklist: null, boxSizes: [], boxSearch: { l: "", w: "", h: "" }, boxSort: "default", screen: "home", view: "board", lastOk: 0 };
+const state = { balances: [], rules: [], activity: [], checklist: null, boxSizes: [], boxSearch: { l: "", w: "", h: "" }, boxSort: "default", screen: "home", view: "board", lastOk: 0, loadedVersion: null };
 const $ = (id) => document.getElementById(id);
 
 /* ===== Helpers ===== */
@@ -640,6 +642,11 @@ async function fetchData() {
     state.checklist = data.checklist || null;
     state.boxSizes = data.boxSizes || [];
     state.lastOk   = Date.now();
+    // Auto-update: if a new version is live, the unattended TV just reloads itself.
+    if (data.version) {
+      if (!state.loadedVersion) { state.loadedVersion = data.version; const vv = $("tvVer"); if (vv) vv.textContent = "v" + data.version; }
+      else if (data.version !== state.loadedVersion) { location.reload(); return; }
+    }
     $("livePill").classList.remove("stale");
     $("liveText").textContent = "Live";
     render();

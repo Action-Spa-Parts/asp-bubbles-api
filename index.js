@@ -28,6 +28,9 @@ const MANAGER_EMAIL = process.env.MANAGER_EMAIL || '';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
+// Front-end version. Bump on every front-end change (together with sw.js CACHE)
+// so open apps detect the new version and show the "Update" banner.
+const APP_VERSION = '15';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -459,6 +462,7 @@ async function getData(who) {
     approved: approved.rows,
     allAwards: allAwards.rows,
     checklist,
+    version: APP_VERSION,
   };
 }
 
@@ -516,6 +520,7 @@ async function getPublic() {
     activity: activity.rows,
     checklist,
     boxSizes,
+    version: APP_VERSION,
   };
 }
 
@@ -1624,6 +1629,7 @@ app.post('/', async (req, res) => {
     switch (action) {
       case 'login':       out = await login(body.pin); break;
       case 'getPublic':   out = await getPublic(); break;
+      case 'getVersion':  out = { version: APP_VERSION }; break;
       case 'adminLogin':  out = await adminLogin(body); break;
       case 'adminSignup': out = await adminSignup(body); break;
       case 'adminLogout': out = await adminLogout(body); break;

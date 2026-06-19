@@ -522,6 +522,12 @@
   /* Home launcher (Action Warehouse) */
   .bottomnav[hidden] { display: none; }
   header.top[hidden] { display: none; }
+
+  /* New-version update banner */
+  #updateBar { position:fixed; top:0; left:0; right:0; z-index:400; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; gap:16px; padding:13px 16px; font-size:15px; font-weight:600; box-shadow:0 2px 14px rgba(30,58,138,0.3); }
+  #updateBar[hidden] { display:none; }
+  #updateBar button { background:#fff; color:var(--accent); border:none; border-radius:8px; padding:9px 18px; font-size:14px; font-weight:700; cursor:pointer; font-family:inherit; }
+  #updateBar button:hover { filter:brightness(0.96); }
   .home-head { text-align:center; padding: 6px 0 24px; }
   .home-head .home-logo {
     width:64px; height:64px; border-radius:18px; box-shadow:var(--shadow-card);
@@ -696,6 +702,11 @@
 </head>
 <body class="pre-auth">
 
+<div id="updateBar" hidden>
+  <span>🔄 A new version of the app is ready.</span>
+  <button id="updateBtn">Update now</button>
+</div>
+
 <!-- Floating background bubbles (decorative) -->
 <div class="bubbles" aria-hidden="true">
   <span style="left:4%;  width:46px; height:46px; animation-duration:22s; animation-delay:0s;"></span>
@@ -790,6 +801,7 @@
     <button class="ghost" id="refreshBtn">Refresh</button>
     <button class="ghost" id="manageBtn" hidden>⚙ Manage</button>
     <span style="flex:1"></span>
+    <span class="muted" id="appVersion" style="font-size: 12px;" title="App version"></span>
     <span class="muted" id="identity" style="font-size: 14px;"></span>
     <button class="ghost" id="logoutBtn">Log out</button>
   </section>
@@ -1310,6 +1322,7 @@ const state = {
   eomTab: "vote",          // EOM tab: vote | log
   eomLog: null,            // EOM past-winners log
   eomLogPeriod: "",        // selected month in the log dropdown
+  loadedVersion: null,     // app version this page loaded with (for the update banner)
 };
 
 function normalizeCatalog(rows) {
@@ -2892,8 +2905,32 @@ function applyData(data) {
   state.checklist = data.checklist || null;
   if (data.role) session.role = data.role;
   if (data.name) session.name = data.name;
+  if (data.version) applyVersion(data.version);
   render();
   maybeAlertChecklist();
+}
+
+// Track the running version + detect when a newer one is deployed.
+function applyVersion(v) {
+  if (!state.loadedVersion) {
+    state.loadedVersion = v;
+    const el = $("appVersion"); if (el) el.textContent = "v" + v;
+  } else if (v !== state.loadedVersion) {
+    $("updateBar").hidden = false;   // a newer version is live → show the banner
+  }
+}
+async function checkVersion() {
+  try {
+    const data = await apiCall("getVersion", {});
+    if (data && data.version) applyVersion(data.version);
+  } catch (e) { /* offline / transient — ignore */ }
+}
+// Tapping "Update now" clears the cached app + reloads to the new version (no manual hard reset).
+async function doUpdate() {
+  const btn = $("updateBtn"); if (btn) { btn.disabled = true; btn.textContent = "Updating…"; }
+  try { const regs = await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r => r.unregister())); } catch (e) {}
+  try { const keys = await caches.keys(); await Promise.all(keys.map(k => caches.delete(k))); } catch (e) {}
+  location.reload();
 }
 
 // One-time, per-load pop-up when it's this worker's turn to close up.
@@ -3474,6 +3511,10 @@ $("adminLoginForm").addEventListener("submit", (e) => { e.preventDefault(); doAd
 $("adminSignupForm").addEventListener("submit", (e) => { e.preventDefault(); doAdminSignup(); });
 
 $("logoutBtn").addEventListener("click", logout);
+$("updateBtn").addEventListener("click", doUpdate);
+checkVersion();                                                  // on load (works even on the login screen)
+setInterval(checkVersion, 5 * 60 * 1000);                        // every 5 min while open
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkVersion(); });  // when reopened/refocused
 
 $("refreshBtn").addEventListener("click", fetchData);
 
