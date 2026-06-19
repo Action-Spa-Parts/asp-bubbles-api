@@ -560,8 +560,8 @@
 
   /* Box Counter */
   .bc-tabs { display:flex; gap:8px; margin-bottom:18px; }
-  .bc-tab { flex:1; padding:11px; font-weight:600; border:1px solid var(--border); background:var(--surface); border-radius:10px; color:var(--muted); cursor:pointer; }
-  .bc-tab.active { color:#fff; background:var(--accent); border-color:var(--accent); }
+  .bc-tab, .eom-tab { flex:1; padding:11px; font-weight:600; border:1px solid var(--border); background:var(--surface); border-radius:10px; color:var(--muted); cursor:pointer; font-family:inherit; font-size:inherit; }
+  .bc-tab.active, .eom-tab.active { color:#fff; background:var(--accent); border-color:var(--accent); }
   .bc-hint { color:var(--muted); font-size:13px; margin-bottom:14px; }
   .bc-controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:16px; }
   .bc-search { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--muted); }
@@ -607,6 +607,12 @@
   .eom-rrow .name { font-weight:600; font-size:16px; display:flex; align-items:center; gap:10px; }
   .eom-votes { font-size:20px; font-weight:700; color:var(--accent); font-variant-numeric:tabular-nums; }
   .eom-votes small { font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; margin-left:4px; }
+  .eom-ballots { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:6px 16px; }
+  .eom-brow { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px dashed var(--border); font-size:15px; }
+  .eom-brow:last-child { border-bottom:none; }
+  .eom-brow .v { flex:1; }
+  .eom-arrow { color:var(--muted); }
+  .eom-brow strong { color:var(--accent); }
 
   /* End-of-day checklist */
   .navbtn.alert { color: var(--danger); }
@@ -954,7 +960,15 @@
 
   <!-- ===== Employee of the Month app ===== -->
   <div id="eomScreen" hidden>
-    <div id="eomBody"></div>
+    <div class="bc-tabs">
+      <button class="eom-tab active" data-eomtab="vote">Vote</button>
+      <button class="eom-tab" data-eomtab="log">Past winners</button>
+    </div>
+    <div id="eomVoteView"><div id="eomBody"></div></div>
+    <div id="eomLogView" hidden>
+      <div class="filterbar"><label for="eomLogPeriod">Month</label><select id="eomLogPeriod"><option value="">—</option></select></div>
+      <div id="eomLogBody"></div>
+    </div>
   </div>
 
 </div>
@@ -1293,6 +1307,9 @@ const state = {
   boxMeta: null,           // Box Counter Friday/count status from the server
   earnFilter: "",          // How-to-earn category filter
   eom: null,               // Employee of the Month voting data
+  eomTab: "vote",          // EOM tab: vote | log
+  eomLog: null,            // EOM past-winners log
+  eomLogPeriod: "",        // selected month in the log dropdown
 };
 
 function normalizeCatalog(rows) {
@@ -1871,7 +1888,7 @@ function showScreen(name) {
   $("appSub").textContent = t[1];
   if (name === "checklist") loadChecklist();
   if (name === "boxcounter") loadBoxSizes();
-  if (name === "eom") loadEom();
+  if (name === "eom") { switchEomTab("vote"); loadEom(); }
 }
 
 // Open the Bubbles app on its default tab.
@@ -2205,6 +2222,60 @@ async function castEomVote(name) {
   } catch (err) {
     alert("Error: " + (err && err.message ? err.message : err));
   }
+}
+
+function switchEomTab(tab) {
+  state.eomTab = tab;
+  $("eomVoteView").hidden = tab !== "vote";
+  $("eomLogView").hidden = tab !== "log";
+  document.querySelectorAll(".eom-tab").forEach(b => b.classList.toggle("active", b.dataset.eomtab === tab));
+  if (tab === "log") loadEomLog();
+}
+
+async function loadEomLog() {
+  $("eomLogBody").innerHTML = `<div class="empty"><div>Loading…</div></div>`;
+  try {
+    const data = await apiCall("getEomLog", { pin: session.pin });
+    if (data.error) { $("eomLogBody").innerHTML = `<div class="empty">${escapeHtml(data.error)}</div>`; return; }
+    state.eomLog = data;
+    const periods = data.periods || [];
+    const sel = $("eomLogPeriod");
+    sel.innerHTML = periods.length
+      ? periods.map(p => `<option value="${escapeAttr(p.period)}">${escapeHtml(p.label)}</option>`).join("")
+      : `<option value="">No results yet</option>`;
+    if (!periods.some(p => p.period === state.eomLogPeriod)) state.eomLogPeriod = periods.length ? periods[0].period : "";
+    sel.value = state.eomLogPeriod;
+    renderEomLog();
+  } catch (err) {
+    $("eomLogBody").innerHTML = `<div class="empty">Couldn't load (${escapeHtml(err && err.message ? err.message : String(err))}).</div>`;
+  }
+}
+
+function renderEomLog() {
+  const el = $("eomLogBody");
+  const log = state.eomLog;
+  if (!log || !(log.periods || []).length) {
+    el.innerHTML = `<div class="empty"><h3>No results yet</h3><div>Past Employee of the Month results will show here.</div></div>`;
+    return;
+  }
+  const entry = log.periods.find(p => p.period === state.eomLogPeriod) || log.periods[0];
+  let html = "";
+  if (entry.winner) {
+    html += `<div class="eom-winner">🏆
+      <div class="eom-wlabel">${escapeHtml(entry.label)} Employee of the Month</div>
+      <div class="eom-wname">${escapeHtml(entry.winner.name)}</div>
+      <div class="eom-wvotes">${entry.winner.votes} vote${entry.winner.votes === 1 ? "" : "s"}</div>
+    </div>`;
+  }
+  html += `<h2 class="section">Vote results</h2>` + eomRankHtml(entry.tally);
+  if (entry.ballots) {
+    html += `<h2 class="section" style="margin-top:18px;">Who voted <span class="muted" style="font-weight:400; text-transform:none; letter-spacing:0;">(managers only)</span></h2>`;
+    html += entry.ballots.length
+      ? `<div class="eom-ballots">` + entry.ballots.map(b =>
+          `<div class="eom-brow"><span class="v">${escapeHtml(b.voter)}</span><span class="eom-arrow">→</span><strong>${escapeHtml(b.choice)}</strong></div>`).join("") + `</div>`
+      : `<div class="cl-meta">No ballots.</div>`;
+  }
+  el.innerHTML = html;
 }
 
 // Highlight the Closing Checklist home tile (red border + pulse + "your turn"
@@ -3435,6 +3506,8 @@ $("tileBubbles").addEventListener("click", openBubbles);
 $("tileChecklist").addEventListener("click", () => showScreen("checklist"));
 $("tileBoxCounter").addEventListener("click", () => showScreen("boxcounter"));
 $("tileEom").addEventListener("click", () => showScreen("eom"));
+document.querySelectorAll(".eom-tab").forEach(b => b.addEventListener("click", () => switchEomTab(b.dataset.eomtab)));
+$("eomLogPeriod").addEventListener("change", () => { state.eomLogPeriod = $("eomLogPeriod").value; renderEomLog(); });
 document.querySelectorAll(".bc-tab").forEach(b => b.addEventListener("click", () => switchBoxTab(b.dataset.bctab)));
 $("bcSaveBtn").addEventListener("click", saveBoxCountNow);
 document.querySelectorAll("[data-bcsearch]").forEach(inp => inp.addEventListener("input", () => {

@@ -1581,6 +1581,35 @@ async function castEomVote(who, choice) {
   return await getEom(who);
 }
 
+// Past Employee of the Month results. Everyone sees the vote counts per month
+// (in a dropdown); only managers get the per-voter ballots (who voted for whom).
+// Employees can't see the currently-open period until it closes.
+async function getEomLog(who) {
+  if (!who) return { error: 'Not authorized' };
+  const meta = await eomMeta();
+  const isMgr = isManager(who);
+  const openPeriod = meta.votingOpen ? meta.awardPeriod : null;
+  const { rows: prows } = await pool.query('SELECT DISTINCT period FROM eom_votes ORDER BY period DESC');
+  const periods = [];
+  for (const pr of prows) {
+    const p = pr.period;
+    if (!isMgr && openPeriod && p === openPeriod) continue;   // hide in-progress month from employees
+    const { rows: tally } = await pool.query(
+      `SELECT choice_name AS name, COUNT(*)::int AS votes FROM eom_votes
+         WHERE period = $1 GROUP BY choice_name ORDER BY votes DESC, choice_name`, [p]);
+    const [y, m] = p.split('-').map(Number);
+    const entry = { period: p, label: monthLabel(y, m),
+      winner: tally.length ? { name: tally[0].name, votes: tally[0].votes } : null, tally };
+    if (isMgr) {
+      const { rows: ballots } = await pool.query(
+        'SELECT voter_name AS voter, choice_name AS choice FROM eom_votes WHERE period = $1 ORDER BY voter_name', [p]);
+      entry.ballots = ballots;
+    }
+    periods.push(entry);
+  }
+  return { periods, isManager: isMgr };
+}
+
 app.post('/', async (req, res) => {
   let body;
   try {
@@ -1649,6 +1678,7 @@ app.post('/', async (req, res) => {
         // ----- Employee of the Month -----
         case 'getEom':       out = await getEom(who); break;
         case 'castEomVote':  out = await castEomVote(who, body.choice); break;
+        case 'getEomLog':    out = await getEomLog(who); break;
         default:                  out = { error: 'Unknown action: ' + action };
       }
     }
