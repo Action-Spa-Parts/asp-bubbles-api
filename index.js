@@ -30,7 +30,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '15';
+const APP_VERSION = '16';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1615,6 +1615,15 @@ async function getEomLog(who) {
   return { periods, isManager: isMgr };
 }
 
+// Clear EOM votes (manager only). No period → all. Used to wipe test votes.
+async function clearEomVotes(who, period) {
+  if (!isManager(who)) return { error: 'Only a manager can clear votes.' };
+  const r = period
+    ? await pool.query('DELETE FROM eom_votes WHERE period = $1', [period])
+    : await pool.query('DELETE FROM eom_votes');
+  return { cleared: r.rowCount };
+}
+
 app.post('/', async (req, res) => {
   let body;
   try {
@@ -1685,6 +1694,7 @@ app.post('/', async (req, res) => {
         case 'getEom':       out = await getEom(who); break;
         case 'castEomVote':  out = await castEomVote(who, body.choice); break;
         case 'getEomLog':    out = await getEomLog(who); break;
+        case 'clearEomVotes': out = await clearEomVotes(who, body.period); break;
         default:                  out = { error: 'Unknown action: ' + action };
       }
     }
