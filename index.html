@@ -601,10 +601,12 @@
   .eom-winner .eom-wlabel { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:700; margin-top:10px; }
   .eom-winner .eom-wname { font-size:28px; font-weight:800; color:var(--text); margin-top:4px; letter-spacing:-0.01em; }
   .eom-winner .eom-wvotes { font-size:14px; color:var(--muted); font-weight:600; margin-top:3px; }
-  .eom-tally { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:6px 16px; }
-  .eom-trow { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px dashed var(--border); font-size:15px; }
-  .eom-trow:last-child { border-bottom:none; }
-  .eom-trow strong { color:var(--accent); font-variant-numeric:tabular-nums; }
+  .eom-board { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); overflow:hidden; margin:6px 0 12px; }
+  .eom-rrow { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:13px 16px; border-bottom:1px solid var(--border); }
+  .eom-rrow:last-child { border-bottom:none; }
+  .eom-rrow .name { font-weight:600; font-size:16px; display:flex; align-items:center; gap:10px; }
+  .eom-votes { font-size:20px; font-weight:700; color:var(--accent); font-variant-numeric:tabular-nums; }
+  .eom-votes small { font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; margin-left:4px; }
 
   /* End-of-day checklist */
   .navbtn.alert { color: var(--danger); }
@@ -2141,10 +2143,18 @@ async function loadEom() {
   }
 }
 
-function eomTallyHtml(tally) {
+// Ranked standings (like the Bubbles leaderboard): rank circle, name, votes.
+// Ties share a rank (competition ranking).
+function eomRankHtml(tally) {
   if (!tally.length) return `<div class="cl-meta">No votes yet.</div>`;
-  return `<div class="eom-tally">` + tally.map(t =>
-    `<div class="eom-trow"><span>${escapeHtml(t.name)}</span><strong>${t.votes}</strong></div>`).join("") + `</div>`;
+  let rank = 0, prev = null;
+  return `<div class="eom-board">` + tally.map((t, i) => {
+    if (prev === null || t.votes !== prev) { rank = i + 1; prev = t.votes; }
+    return `<div class="eom-rrow">
+      <div class="name"><span class="rank ${rank <= 3 ? "top" : ""}">${rank}</span>${escapeHtml(t.name)}</div>
+      <div class="eom-votes">${t.votes}<small>vote${t.votes === 1 ? "" : "s"}</small></div>
+    </div>`;
+  }).join("") + `</div>`;
 }
 
 function renderEom() {
@@ -2155,7 +2165,8 @@ function renderEom() {
   if (e.votingOpen) {
     html += `<div class="cl-banner">Vote for <strong>${escapeHtml(e.awardLabel)}</strong> Employee of the Month — one vote each, and it's final once you pick. Voting closes <strong>${escapeHtml(fmtRunDate(e.closesOn))}</strong>.</div>`;
     if (!e.canVote) {
-      html += `<div class="cl-meta">${e.progress.voted} of ${e.progress.total} employees have voted.</div>` + eomTallyHtml(e.tally);
+      html += `<h2 class="section" style="margin-top:4px;">Current standings</h2>` + eomRankHtml(e.tally);
+      html += `<div class="cl-meta">${e.progress.voted} of ${e.progress.total} employees have voted.</div>`;
     } else if (e.mine.voted) {
       html += `<div class="cl-banner done">✓ You voted for <strong>${escapeHtml(e.mine.choice)}</strong>. The winner is revealed after voting closes.</div>`;
       html += `<div class="cl-meta">${e.progress.voted} of ${e.progress.total} have voted.</div>`;
