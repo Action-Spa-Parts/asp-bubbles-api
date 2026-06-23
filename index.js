@@ -30,7 +30,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '21';
+const APP_VERSION = '22';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1369,16 +1369,20 @@ async function resetChecklist(who) {
 const BRIDGE_TOKEN = process.env.PRINT_BRIDGE_TOKEN || '';
 const BRIDGE_ONLINE_MS = 45000;   // bridge counts as "online" if seen in this window
 
-// Build ZPL for a 2" x 1" label @ 203 dpi (406 x 203 dots): big part number on
-// top, centered Code 128 below. ^PQ prints `qty` copies. Mirrors the client preview.
-function buildLabelZpl(code, qty) {
-  const c = String(code == null ? '' : code).replace(/[\r\n\t]/g, '').replace(/[\^~\\]/g, '').trim().slice(0, 40);
+// Build ZPL for a 2" x 1" label @ 203 dpi (406 x 203 dots): description line on
+// top, big part number, then a centered Code 128. Layout dialed in on the real
+// ZQ620 (v22). ^PQ prints `qty` copies. Mirrors the client preview.
+function buildLabelZpl(code, qty, desc) {
+  const clean = (s, n) => String(s == null ? '' : s).replace(/[\r\n\t]/g, '').replace(/[\^~\\]/g, '').trim().slice(0, n);
+  const c = clean(code, 40);
+  const d = clean(desc != null ? desc : 'PLACEHOLDER', 38);
   const q = Math.max(1, Math.min(999, parseInt(qty, 10) || 1));
   return [
     '^XA', '^CI28', '^PW406', '^LL0203',
-    '^FO0,22^A0N,52,52^FB406,1,0,C,0^FD' + c + '^FS',
-    '^BY2,2.5,86',
-    '^FO0,96^FB406,1,0,C^BCN,86,N,N,N^FD' + c + '^FS',
+    '^FO8,24^A0N,24,24^FB390,1,0,C,0^FD' + d + '^FS',
+    '^FO0,62^A0N,46,46^FB406,1,0,C,0^FD' + c + '^FS',
+    '^BY3,2.5',
+    '^FO28,118^FB378,1,0,C^BCN,48,N,N,N^FD' + c + '^FS',
     '^PQ' + q + ',0,0,N', '^XZ'
   ].join('\n');
 }
@@ -1397,7 +1401,10 @@ async function enqueuePrint(who, body) {
     .replace(/[\r\n\t]/g, '').replace(/[\^~\\]/g, '').trim().slice(0, 40);
   if (!code) return { error: 'Nothing to print — scan or type a barcode first.' };
   const qty = Math.max(1, Math.min(999, parseInt(body && body.qty, 10) || 1));
-  const zpl = buildLabelZpl(code, qty);
+  // TODO: when the parts list (Excel/SQL) is imported, look up the real description
+  // for `code` here instead of the placeholder.
+  const description = 'PLACEHOLDER';
+  const zpl = buildLabelZpl(code, qty, description);
   const { rows } = await pool.query(
     'INSERT INTO print_jobs (code, qty, zpl, requested_by) VALUES ($1,$2,$3,$4) RETURNING id',
     [code, qty, zpl, who.name || null]);
