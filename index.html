@@ -17,6 +17,8 @@
 <!-- Code 128 renderer for the on-screen label preview (the printer renders its own barcode from ZPL).
      Bundled locally (MIT, JsBarcode v3.11.6) so the preview works offline on the warehouse handheld. -->
 <script src="jsbarcode.min.js" defer></script>
+<!-- Zebra Browser Print JS library — the supported bridge from the page to the Browser Print app (incl. Android). -->
+<script src="browserprint.min.js" defer></script>
 <style>
   :root {
     --bg: #f7f7f5;
@@ -2000,11 +2002,12 @@ function showScreen(name) {
 }
 
 /* ---------- Label Printer (scan a part → reprint Code 128 labels on the Zebra ZQ620) ----------
-   Prints via the Zebra Browser Print agent running locally on the device (e.g. the
-   Chainway C61). Browser Print exposes a small HTTP API on localhost; we POST raw ZPL.
-   No server round-trip — the cloud server can't reach a Bluetooth printer on the LAN. */
-const LP_BASES = ["http://127.0.0.1:9100", "http://127.0.0.1:9101"];
-const lp = { base: null, device: null, last: null };
+   Prints via the Zebra Browser Print app on the device (e.g. the Chainway C61), using
+   Zebra's BrowserPrint JS library (browserprint.min.js). On Android, Browser Print does
+   NOT expose a localhost HTTP port — the library is the only supported bridge. The first
+   print triggers an ALLOW/BLOCK prompt in the Browser Print app. No server round-trip —
+   the cloud server can't reach the printer on the LAN. */
+const lp = { device: null, last: null, lastErr: null };
 
 function initLabelPrinter() {
   lpSetStatus("");
@@ -2059,39 +2062,41 @@ function lpBuildZpl(code, qty) {
   ].join("\n");
 }
 
+function lpBPReady() { return typeof BrowserPrint !== "undefined" && BrowserPrint && typeof BrowserPrint.getDefaultDevice === "function"; }
+
 async function lpDetectPrinter() {
   const el = $("lpPrinter");
   if (el) el.textContent = "checking…";
-  const dev = await lpFindPrinter().catch(() => null);
-  if (el) el.textContent = dev ? (dev.name || "Zebra printer ready") : "not found — open Zebra Browser Print";
+  if (!lpBPReady()) { if (el) el.textContent = "Browser Print app not detected — install & open it"; return; }
+  const dev = await lpFindPrinter();
+  if (el) {
+    if (dev) el.textContent = (dev.name || "Zebra printer") + " ✓";
+    else el.textContent = lp.lastErr ? lp.lastErr : "no default printer — set the ZQ620 as default in Browser Print";
+  }
 }
 
-// Ask the local Browser Print agent for the default printer (tries both known ports).
-async function lpFindPrinter() {
-  for (const base of LP_BASES) {
-    try {
-      const r = await fetch(base + "/default?type=printer", { method: "GET" });
-      if (!r.ok) continue;
-      const txt = await r.text();
-      let dev = null;
-      try { dev = JSON.parse(txt); } catch (_) {}
-      if (dev && (dev.uid || dev.name)) { lp.base = base; lp.device = dev; return dev; }
-    } catch (_) { /* agent not running on this port */ }
-  }
-  return null;
+// Ask the Browser Print app (via Zebra's JS library) for the user's default printer.
+function lpFindPrinter() {
+  return new Promise((resolve) => {
+    lp.lastErr = null;
+    if (!lpBPReady()) { lp.lastErr = "Browser Print library not loaded"; return resolve(null); }
+    BrowserPrint.getDefaultDevice("printer",
+      (device) => { lp.device = device || null; resolve(lp.device); },
+      (err) => { lp.lastErr = (typeof err === "string" && err) ? err : "Can't reach the Browser Print app"; resolve(null); });
+  });
 }
 
 async function lpSendZpl(zpl) {
+  if (!lpBPReady()) throw new Error("Browser Print app isn't running. Open it on this device and try again.");
   if (!lp.device) {
     const d = await lpFindPrinter();
-    if (!d) throw new Error("No printer found. Open Zebra Browser Print on this device and select the ZQ620.");
+    if (!d) throw new Error(lp.lastErr || "No default printer. In Browser Print, set the ZQ620 as default, then reload and tap Allow.");
   }
-  const r = await fetch(lp.base + "/write", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ device: lp.device, data: zpl })
+  await new Promise((resolve, reject) => {
+    lp.device.send(zpl,
+      () => resolve(true),
+      (err) => reject(new Error((typeof err === "string" && err) ? err : "Printer didn't accept the job (check it's on and in range).")));
   });
-  if (!r.ok) throw new Error("Browser Print returned " + r.status);
 }
 
 function lpSetStatus(msg, kind) {

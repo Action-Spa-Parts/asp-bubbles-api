@@ -30,7 +30,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '18';
+const APP_VERSION = '19';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1343,7 +1343,7 @@ const STATIC_FILES = [
   'index.html', 'tv.html', 'sw.js', 'manifest.json',
   'logo.svg', 'bubbles-icon.png',
   'icon-192.png', 'icon-512.png', 'apple-touch-icon.png',
-  'jsbarcode.min.js',
+  'jsbarcode.min.js', 'browserprint.min.js',
 ];
 
 function sendStatic(res, name) {

@@ -2,7 +2,7 @@
 // the app opens instantly and survives a flaky connection. API data is always
 // fetched live (never cached).
 
-const CACHE = "action-spa-warehouse-v18";
+const CACHE = "action-spa-warehouse-v19";
 const SHELL = [
   "./",
   "./index.html",
@@ -13,6 +13,7 @@ const SHELL = [
   "./icon-512.png",
   "./apple-touch-icon.png",
   "./jsbarcode.min.js",
+  "./browserprint.min.js",
 ];
 
 self.addEventListener("install", (event) => {
