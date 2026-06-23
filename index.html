@@ -1033,7 +1033,7 @@
   <!-- ===== Label Printer app ===== -->
   <div id="labelScreen" hidden>
     <div class="lp-wrap">
-      <div class="lp-hint">Scan a part barcode (or type the number), set how many, then tap Print. Labels print on the Zebra ZQ620.</div>
+      <div class="lp-hint">Set how many copies, then <b>scan a barcode and it prints right away</b> — keep scanning for each item. (Or type a number and tap Print.)</div>
       <label class="lp-field">
         <span class="lp-lab">Part barcode</span>
         <input id="lpCode" type="text" inputmode="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Scan here… or type e.g. 6000-362">
@@ -2140,6 +2140,20 @@ function lpReprintLast() {
 }
 
 function lpTestPrint() { lpPrint("TEST-123", "Test label queued"); }
+
+// Scanner workflow: a hardware scan ends with Enter -> print the current quantity
+// immediately, then clear + re-focus so the next item can be scanned right away.
+// A quick duplicate-guard ignores the same code scanned twice within ~1.2s.
+async function lpScanEnter() {
+  const code = lpCleanCode($("lpCode").value);
+  if (!code) return;
+  const now = Date.now();
+  const dup = (code === lp.lastScanCode) && (now - (lp.lastScanAt || 0) < 1200);
+  if (!dup) { lp.lastScanCode = code; lp.lastScanAt = now; await lpPrint(); }
+  $("lpCode").value = "";
+  lpRenderPreview();
+  try { $("lpCode").focus(); } catch (_) {}
+}
 
 // Open the Bubbles app on its default tab.
 function openBubbles() {
@@ -3790,7 +3804,7 @@ document.querySelectorAll(".eom-tab").forEach(b => b.addEventListener("click", (
 $("tileLabel").addEventListener("click", () => showScreen("label"));
 $("lpCode").addEventListener("input", lpRenderPreview);
 $("lpCode").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); lpRenderPreview(); try { $("lpQty").focus(); $("lpQty").select(); } catch (_) {} }
+  if (e.key === "Enter") { e.preventDefault(); lpScanEnter(); }
 });
 $("lpQty").addEventListener("input", lpRenderPreview);
 $("lpQty").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); lpPrint(); } });
