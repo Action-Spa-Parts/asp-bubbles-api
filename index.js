@@ -30,7 +30,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '20';
+const APP_VERSION = '21';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -224,6 +224,17 @@ async function ensureSchema() {
       last_seen TIMESTAMPTZ
     )`);
   await pool.query(`INSERT INTO print_bridge (id, last_seen) VALUES (1, NULL) ON CONFLICT (id) DO NOTHING`);
+  // The bridge auth token is generated here (NOT hard-coded — the repo is public)
+  // and shown to a manager in the app to paste into the bridge script. No Railway
+  // env var needed. (PRINT_BRIDGE_TOKEN env still works too, if ever set.)
+  await pool.query(`ALTER TABLE print_bridge ADD COLUMN IF NOT EXISTS token TEXT`);
+  {
+    const { rows: br } = await pool.query('SELECT token FROM print_bridge WHERE id = 1');
+    if (!br.length || !br[0].token) {
+      await pool.query('UPDATE print_bridge SET token = $1 WHERE id = 1',
+        [crypto.randomBytes(24).toString('hex')]);
+    }
+  }
 }
 
 // =================================================================
@@ -1396,16 +1407,30 @@ async function enqueuePrint(who, body) {
 async function getPrintStatus(who) {
   if (!who) return { error: 'Please sign in.' };
   const { rows } = await pool.query("SELECT COUNT(*)::int AS pending FROM print_jobs WHERE status = 'pending'");
-  return { bridgeOnline: await bridgeOnline(), pending: rows[0].pending };
+  const out = { bridgeOnline: await bridgeOnline(), pending: rows[0].pending };
+  // Only a manager may see the bridge token (to paste into the warehouse PC script).
+  if (isManager(who)) out.bridgeToken = await currentBridgeToken();
+  return out;
 }
 
-// ----- Bridge-facing (authenticated by PRINT_BRIDGE_TOKEN, not a user) -----
-function bridgeOk(body) { return BRIDGE_TOKEN && body && body.bridgeToken === BRIDGE_TOKEN; }
+// ----- Bridge-facing (authenticated by the bridge token, not a user) -----
+async function currentBridgeToken() {
+  const { rows } = await pool.query('SELECT token FROM print_bridge WHERE id = 1');
+  return (rows.length && rows[0].token) ? rows[0].token : '';
+}
+
+async function bridgeOk(body) {
+  const supplied = body && body.bridgeToken;
+  if (!supplied) return false;
+  if (BRIDGE_TOKEN && supplied === BRIDGE_TOKEN) return true;     // optional env override
+  const tok = await currentBridgeToken();
+  return !!tok && supplied === tok;
+}
 
 // Bridge polls this: records a heartbeat, expires very old jobs (so a PC that
 // was off for hours doesn't surprise-print a stack), and returns pending jobs.
 async function printPoll(body) {
-  if (!bridgeOk(body)) return { error: 'Unauthorized' };
+  if (!(await bridgeOk(body))) return { error: 'Unauthorized' };
   await pool.query('UPDATE print_bridge SET last_seen = now() WHERE id = 1');
   await pool.query(
     "UPDATE print_jobs SET status='expired', error='expired (older than 6h)' " +
@@ -1416,7 +1441,7 @@ async function printPoll(body) {
 }
 
 async function printAck(body) {
-  if (!bridgeOk(body)) return { error: 'Unauthorized' };
+  if (!(await bridgeOk(body))) return { error: 'Unauthorized' };
   const id = cleanInt(body.id);
   if (id === null) return { error: 'Bad job id' };
   if (body.ok) {

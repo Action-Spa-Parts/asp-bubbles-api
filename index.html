@@ -1068,6 +1068,11 @@
             <button class="ghost lp-mini" id="lpShowZpl">Show ZPL</button>
           </p>
           <pre id="lpZpl" hidden></pre>
+          <div id="lpTokenRow" hidden style="margin:6px 0 4px; padding:8px 10px; background:var(--accent-soft); border-radius:8px;">
+            <div style="font-weight:600; margin-bottom:4px;">Print bridge token <span style="font-weight:400;">(managers) — paste into the warehouse PC script:</span></div>
+            <code id="lpToken" style="word-break:break-all; font-size:12px;">—</code>
+            <button class="ghost lp-mini" id="lpCopyToken">Copy</button>
+          </div>
           <p style="margin:8px 0 4px;">Printing works on <b>any device</b> — nothing to install. Labels are queued on the server and printed by the warehouse PC.</p>
           <ul class="lp-steps">
             <li>If status shows <b>Offline</b>, make sure the <b>warehouse print PC is on</b> (it runs the small print bridge). Jobs wait in line and print once it's back on.</li>
@@ -2084,6 +2089,12 @@ function lpShowPrinterStatus(s) {
   } else {
     el.textContent = "Offline — the warehouse print PC may be off" + (s.pending ? (" · " + s.pending + " waiting") : "");
     el.className = "lp-off";
+  }
+  // Managers get the bridge token to paste into the warehouse PC script.
+  const row = $("lpTokenRow");
+  if (row) {
+    if (s.bridgeToken) { $("lpToken").textContent = s.bridgeToken; row.hidden = false; }
+    else { row.hidden = true; }
   }
 }
 
@@ -3793,6 +3804,10 @@ $("lpShowZpl").addEventListener("click", () => {
   const z = $("lpZpl");
   z.hidden = !z.hidden;
   if (!z.hidden) z.textContent = lpBuildZpl(lpCleanCode($("lpCode").value) || "6000-362", lpQtyVal());
+});
+$("lpCopyToken").addEventListener("click", () => {
+  const t = ($("lpToken").textContent || "").trim();
+  if (t && navigator.clipboard) navigator.clipboard.writeText(t).then(() => lpSetStatus("Token copied ✓", "ok"), () => {});
 });
 $("eomLogPeriod").addEventListener("change", () => { state.eomLogPeriod = $("eomLogPeriod").value; renderEomLog(); });
 document.querySelectorAll(".bc-tab").forEach(b => b.addEventListener("click", () => switchBoxTab(b.dataset.bctab)));
