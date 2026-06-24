@@ -1159,6 +1159,25 @@
   </button>
 </nav>
 
+<div class="overlay" id="lpDupModal" hidden>
+  <div class="overlay-card">
+    <div class="dname">Already in the list</div>
+    <div id="lpDupMsg" class="muted" style="font-size:13px; margin:6px 0 14px;"></div>
+    <div class="lp-qtyrow">
+      <span class="lp-lab">New total</span>
+      <div class="lp-stepper">
+        <button type="button" id="lpDupMinus" aria-label="Fewer">−</button>
+        <input id="lpDupQty" type="number" min="1" max="999" value="1" inputmode="numeric">
+        <button type="button" id="lpDupPlus" aria-label="More">＋</button>
+      </div>
+    </div>
+    <div class="lp-actions" style="margin-top:16px;">
+      <button class="ghost" id="lpDupCancel">Cancel</button>
+      <button class="primary" id="lpDupOk">Add to list</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="award" hidden>
   <div class="overlay-card">
     <div class="dhead">
@@ -2079,6 +2098,7 @@ function initLabelPrinter() {
   $("lpCode").value = "";
   $("lpQty").value = "1";
   $("lpZpl").hidden = true;
+  $("lpDupModal").hidden = true;
   lp.batch = [];
   lpRenderBatch();
   lpRenderPreview();
@@ -2189,15 +2209,50 @@ async function lpSendOne(code, qty) {
   }
 }
 
+function lpBatchIndexOf(code) {
+  for (let i = 0; i < lp.batch.length; i++) { if (lp.batch[i].code === code) return i; }
+  return -1;
+}
+
 // Batch: add the current code+qty to the list, then clear for the next scan.
+// If the part is already in the list, ask whether to add to it (combine).
 function lpAddToBatch() {
   const code = lpCleanCode($("lpCode").value);
   if (!code) { lpSetStatus("Scan or type a part number first.", "err"); return false; }
+  const idx = lpBatchIndexOf(code);
+  if (idx >= 0) { lpDupOpen(idx, lpQtyVal()); return false; }   // already added — ask to combine
   lp.batch.push({ code: code, qty: lpQtyVal() });
   $("lpCode").value = ""; $("lpQty").value = "1";
   lpRenderPreview(); lpRenderBatch();
   try { $("lpCode").focus(); } catch (_) {}
   return true;
+}
+
+// Scanned a part that's already in the list -> ask to combine, with an adjustable total.
+function lpDupOpen(idx, addQty) {
+  lp.dupIndex = idx;
+  const it = lp.batch[idx];
+  $("lpDupMsg").textContent = it.code + " is already in your list (" + it.qty + " label" + (it.qty === 1 ? "" : "s") + " so far). Choose the new total:";
+  $("lpDupQty").value = Math.min(999, it.qty + addQty);
+  $("lpDupModal").hidden = false;
+}
+function lpDupQtyVal() {
+  let q = parseInt($("lpDupQty").value, 10);
+  if (!Number.isFinite(q) || q < 1) q = 1;
+  if (q > 999) q = 999;
+  return q;
+}
+function lpDupConfirm() {
+  if (lp.dupIndex != null && lp.batch[lp.dupIndex]) lp.batch[lp.dupIndex].qty = lpDupQtyVal();
+  lpDupClose();
+  lpRenderBatch();
+}
+function lpDupClose() {
+  lp.dupIndex = null;
+  $("lpDupModal").hidden = true;
+  $("lpCode").value = ""; $("lpQty").value = "1";
+  lpRenderPreview();
+  try { $("lpCode").focus(); } catch (_) {}
 }
 function lpRemoveBatch(i) { lp.batch.splice(i, 1); lpRenderBatch(); }
 function lpRenderBatch() {
@@ -2221,7 +2276,14 @@ function lpUpdatePrintLabel() {
 
 // Print everything: the queued batch plus whatever's currently in the box.
 async function lpPrintBatch() {
-  if (lpCleanCode($("lpCode").value)) lpAddToBatch();
+  // Fold the current box into the batch (merge if it's already there) before printing.
+  const curCode = lpCleanCode($("lpCode").value);
+  if (curCode) {
+    const idx = lpBatchIndexOf(curCode);
+    if (idx >= 0) lp.batch[idx].qty = Math.min(999, lp.batch[idx].qty + lpQtyVal());
+    else lp.batch.push({ code: curCode, qty: lpQtyVal() });
+    $("lpCode").value = ""; $("lpQty").value = "1"; lpRenderPreview(); lpRenderBatch();
+  }
   if (!lp.batch.length) { lpSetStatus("Scan or type a part number first.", "err"); return; }
   const items = lp.batch.slice();
   $("lpPrint").disabled = true; $("lpAdd").disabled = true;
@@ -4008,6 +4070,10 @@ $("lpAdd").addEventListener("click", lpAddToBatch);
 $("lpPrint").addEventListener("click", lpPrintBatch);
 $("lpReprint").addEventListener("click", lpReprintLast);
 $("lpBatchList").addEventListener("click", (e) => { const b = e.target.closest(".lp-bx"); if (b) lpRemoveBatch(parseInt(b.dataset.bi, 10)); });
+$("lpDupMinus").addEventListener("click", () => { $("lpDupQty").value = Math.max(1, lpDupQtyVal() - 1); });
+$("lpDupPlus").addEventListener("click", () => { $("lpDupQty").value = Math.min(999, lpDupQtyVal() + 1); });
+$("lpDupOk").addEventListener("click", lpDupConfirm);
+$("lpDupCancel").addEventListener("click", lpDupClose);
 $("lpConnect").addEventListener("click", lpDetectPrinter);
 $("lpTest").addEventListener("click", lpTestPrint);
 $("lpShowZpl").addEventListener("click", () => {
