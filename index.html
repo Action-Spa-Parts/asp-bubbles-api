@@ -2144,6 +2144,11 @@ function lpRenderPreview() {
 
 // Build ZPL for a 2" x 1" label @ 203 dpi (406 x 203 dots): big part number on top,
 // centered Code 128 below. ^PQ prints `qty` copies on one button press.
+// Scale the big-number font and the Code 128 module width to the code length so a
+// label always fits the 2" width no matter how long the part number is.
+function lpNumFont(code) { const len = Math.max(String(code || "").length, 1); return Math.max(22, Math.min(46, Math.floor(390 / len))); }
+function lpModW(code) { const len = Math.max(String(code || "").length, 1); const m = 11 * (len + 2) + 13; return (m * 3 <= 376) ? 3 : (m * 2 <= 376 ? 2 : 1); }
+
 function lpBuildZpl(code, qty) {
   return [
     "^XA",
@@ -2151,8 +2156,8 @@ function lpBuildZpl(code, qty) {
     "^PW406",
     "^LL0203",
     "^FO8,24^A0N,24,24^FB390,1,0,C,0^FDPLACEHOLDER^FS",
-    "^FO0,62^A0N,46,46^FB406,1,0,C,0^FD" + code + "^FS",
-    "^BY3,2.5",
+    "^FO0,62^A0N," + lpNumFont(code) + "," + lpNumFont(code) + "^FB406,1,0,C,0^FD" + code + "^FS",
+    "^BY" + lpModW(code) + ",2.5",
     "^FO28,118^FB378,1,0,C^BCN,48,N,N,N^FD" + code + "^FS",
     "^PQ" + qty + ",0,0,N",
     "^XZ"

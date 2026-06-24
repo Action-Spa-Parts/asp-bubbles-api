@@ -30,7 +30,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '30';
+const APP_VERSION = '31';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1391,11 +1391,17 @@ function buildLabelZpl(code, qty, desc) {
   const c = clean(code, 40);
   const d = clean(desc != null ? desc : 'PLACEHOLDER', 38);
   const q = Math.max(1, Math.min(999, parseInt(qty, 10) || 1));
+  const len = Math.max(c.length, 1);
+  // Keep the layout consistent for any code length: shrink the big-number font and the
+  // Code 128 module width as the code gets longer, so both always fit the 2" width.
+  const numFont = Math.max(22, Math.min(46, Math.floor(390 / len)));
+  const estModules = 11 * (len + 2) + 13;            // ~Code128 width in modules (safe over-estimate)
+  const modW = (estModules * 3 <= 376) ? 3 : (estModules * 2 <= 376 ? 2 : 1);
   return [
     '^XA', '^CI28', '^PW406', '^LL0203',
     '^FO8,24^A0N,24,24^FB390,1,0,C,0^FD' + d + '^FS',
-    '^FO0,62^A0N,46,46^FB406,1,0,C,0^FD' + c + '^FS',
-    '^BY3,2.5',
+    '^FO0,62^A0N,' + numFont + ',' + numFont + '^FB406,1,0,C,0^FD' + c + '^FS',
+    '^BY' + modW + ',2.5',
     '^FO28,118^FB378,1,0,C^BCN,48,N,N,N^FD' + c + '^FS',
     '^PQ' + q + ',0,0,N', '^XZ'
   ].join('\n');
