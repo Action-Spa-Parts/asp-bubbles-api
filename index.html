@@ -575,16 +575,17 @@
   .lp-lab { font-size:13px; font-weight:600; color:var(--muted); }
   #lpCode { font-size:22px; font-weight:700; padding:14px 16px; border:2px solid var(--accent); border-radius:var(--radius); background:var(--surface); letter-spacing:.5px; width:100%; }
   #lpCode:focus { outline:none; box-shadow:0 0 0 4px var(--accent-soft); }
-  .lp-qtyrow { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-  .lp-qtygrp { display:flex; align-items:center; gap:10px; }
-  .lp-cancel { height:48px; min-width:110px; border:1px solid var(--border); border-radius:12px; background:var(--surface); font-size:15px; font-weight:600; cursor:pointer; color:var(--text); }
+  .lp-qtyrow { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:nowrap; }
+  .lp-qtygrp { display:flex; align-items:center; gap:8px; flex:0 1 auto; min-width:0; justify-content:flex-end; }
+  .lp-cancel { height:48px; flex:0 0 auto; padding:0 14px; border:1px solid var(--border); border-radius:12px; background:var(--surface); font-size:15px; font-weight:600; cursor:pointer; color:var(--text); }
   .lp-cancel:active { background:var(--bg); }
   #lpClear { width:100%; margin-top:8px; }
-  .lp-stepper { display:flex; align-items:center; }
-  .lp-stepper button { width:48px; height:48px; font-size:24px; font-weight:700; border:1px solid var(--border); background:var(--surface); color:var(--accent); cursor:pointer; }
+  .lp-stepper { display:flex; align-items:center; flex:0 0 auto; }
+  .lp-stepper button { width:46px; height:48px; font-size:24px; font-weight:700; border:1px solid var(--border); background:var(--surface); color:var(--accent); cursor:pointer; flex:0 0 auto; }
   .lp-stepper button:first-child { border-radius:12px 0 0 12px; }
   .lp-stepper button:last-child { border-radius:0 12px 12px 0; }
-  .lp-stepper input { width:72px; height:48px; text-align:center; font-size:20px; font-weight:700; border:1px solid var(--border); border-left:0; border-right:0; -moz-appearance:textfield; }
+  .lp-stepper input { width:54px; height:48px; text-align:center; font-size:20px; font-weight:700; border:1px solid var(--border); border-left:0; border-right:0; -moz-appearance:textfield; }
+  @media (max-width:360px) { .lp-qtygrp .lp-lab { display:none; } }
   .lp-stepper input::-webkit-outer-spin-button, .lp-stepper input::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
   .lp-previewwrap { display:flex; flex-direction:column; align-items:center; gap:6px; }
   .lp-label { width:300px; height:150px; background:#fff; border:1px solid #d4d4d4; border-radius:6px; box-shadow:var(--shadow-card); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:10px; }
