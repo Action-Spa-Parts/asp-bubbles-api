@@ -568,7 +568,7 @@
   .app-tile.alert .tile-icon { animation: navpulse 1.2s ease-in-out infinite; }
 
   /* Label Printer */
-  #labelScreen { padding-bottom:40px; }
+  #labelScreen { padding-bottom:90px; }
   .lp-wrap { max-width:520px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
   .lp-hint { color:var(--muted); font-size:14px; }
   .lp-field { display:flex; flex-direction:column; gap:6px; }
@@ -612,6 +612,11 @@
   .lp-ok { color:var(--good); font-weight:600; }
   .lp-err2 { color:var(--danger); font-weight:600; }
   .lp-muted { color:var(--muted); }
+  .lp-bitem { display:flex; justify-content:space-between; align-items:center; padding:6px 10px; border:1px solid var(--border); border-radius:8px; margin-bottom:6px; font-size:14px; background:var(--surface); }
+  .lp-bx { border:none; background:none; color:var(--danger); font-size:15px; cursor:pointer; padding:2px 8px; }
+  .lp-actbar { display:flex; gap:8px; margin-bottom:10px; max-width:520px; }
+  .lp-actbar input { flex:1; padding:8px 10px; border:1px solid var(--border); border-radius:8px; font-size:14px; }
+  .lp-actbar select { padding:8px; border:1px solid var(--border); border-radius:8px; font-size:14px; }
   .lp-steps { margin:10px 0 0; padding-left:20px; line-height:1.7; }
   #lpZpl { background:#0f172a; color:#cbd5e1; padding:10px; border-radius:8px; font-size:11px; overflow:auto; white-space:pre-wrap; margin-top:8px; }
 
@@ -1045,10 +1050,6 @@
   <!-- ===== Label Printer app ===== -->
   <div id="labelScreen" hidden>
     <div class="lp-wrap">
-      <div class="lp-tabs">
-        <button class="lp-tab active" data-lptab="print">Print</button>
-        <button class="lp-tab" data-lptab="activity" id="lpTabActivity" hidden>Activity</button>
-      </div>
       <div id="lpPrintView">
       <div class="lp-hint">Scan a part barcode (or type the number), set the quantity, then tap Print. Labels print on the Zebra ZQ620.</div>
       <label class="lp-field">
@@ -1071,10 +1072,15 @@
         </div>
         <div class="lp-cap">Preview · 2″ × 1″ label</div>
       </div>
-      <div class="lp-actions">
-        <button class="primary" id="lpPrint" disabled>🖨️ Print label</button>
-        <button class="ghost" id="lpReprint" hidden>Reprint last</button>
+      <div id="lpBatch" hidden>
+        <div class="lp-lab" style="margin-bottom:4px;">Labels to print</div>
+        <div id="lpBatchList"></div>
       </div>
+      <div class="lp-actions">
+        <button class="ghost" id="lpAdd" disabled>＋ Add another</button>
+        <button class="primary" id="lpPrint" disabled>🖨️ Print label</button>
+      </div>
+      <button class="ghost" id="lpReprint" hidden style="width:100%; margin-top:8px;">Reprint last</button>
       <div class="lp-status" id="lpStatus" hidden></div>
       <details class="lp-setup">
         <summary>Printer status &amp; setup</summary>
@@ -1113,7 +1119,15 @@
       </div><!-- /lpPrintView -->
       <div id="lpActivityView" hidden>
         <h2 class="section" style="font-size:16px; margin-top:0;">Print activity</h2>
-        <div class="lp-hint" style="margin-bottom:10px;">Who printed what, when, and the result (most recent first).</div>
+        <div class="lp-actbar">
+          <input id="lpActSearch" type="text" autocomplete="off" placeholder="Search part # or person">
+          <select id="lpActSort">
+            <option value="recent">Recent</option>
+            <option value="day">By day</option>
+            <option value="person">By person</option>
+            <option value="part">By part #</option>
+          </select>
+        </div>
         <div id="lpActivityBody"></div>
       </div>
     </div>
@@ -1133,6 +1147,15 @@
   </button>
   <button class="navbtn" data-view="earn">
     <span class="navicon">＋</span><span>How to earn</span>
+  </button>
+</nav>
+
+<nav class="bottomnav" id="lpNav" hidden>
+  <button class="navbtn active" data-lptab="print">
+    <span class="navicon">🏷️</span><span>Print</span>
+  </button>
+  <button class="navbtn" data-lptab="activity" id="lpNavActivity" hidden>
+    <span class="navicon">🧾</span><span>Activity</span>
   </button>
 </nav>
 
@@ -2023,6 +2046,7 @@ function showScreen(name) {
   $("eomScreen").hidden = name !== "eom";
   $("labelScreen").hidden = name !== "label";
   document.querySelector(".bottomnav").hidden = name !== "bubbles";
+  if (name !== "label") $("lpNav").hidden = true;   // shown for managers on the label screen (see lpShowPrinterStatus)
   // The home screen has its own centered hero, so hide the duplicate top header there.
   document.querySelector("header.top").hidden = name === "home";
   $("homeBtn").hidden = name === "home";
@@ -2048,13 +2072,15 @@ function showScreen(name) {
    (action "enqueuePrint"); a small "print bridge" on the warehouse PC polls the
    server and sends the ZPL to the printer over the LAN. Here we just enqueue and
    show whether that bridge/PC is currently online. */
-const lp = { last: null };
+const lp = { last: null, batch: [], actJobs: [], actSearch: "", actSort: "recent" };
 
 function initLabelPrinter() {
   lpSetStatus("");
   $("lpCode").value = "";
   $("lpQty").value = "1";
   $("lpZpl").hidden = true;
+  lp.batch = [];
+  lpRenderBatch();
   lpRenderPreview();
   $("lpReprint").hidden = !lp.last;
   setTimeout(() => { try { $("lpCode").focus(); } catch (_) {} }, 60);
@@ -2079,7 +2105,7 @@ function lpQtyVal() {
 function lpRenderPreview() {
   const code = lpCleanCode($("lpCode").value);
   $("lpNum").textContent = code || "—";
-  $("lpPrint").disabled = !code;
+  lpUpdatePrintLabel();
   const svg = $("lpBarcode");
   if (!code) { svg.innerHTML = ""; return; }
   if (typeof JsBarcode === "function") {
@@ -2138,9 +2164,10 @@ function lpShowPrinterStatus(s) {
     if (s.bridgeToken) { $("lpToken").textContent = s.bridgeToken; row.hidden = false; }
     else { row.hidden = true; }
   }
-  // The Activity tab is manager-only (bridgeToken is only returned to managers).
-  const at = $("lpTabActivity");
-  if (at) at.hidden = !s.bridgeToken;
+  // The bottom nav + Activity tab are manager-only (bridgeToken is only returned to managers).
+  const mgr = !!s.bridgeToken;
+  const nav = $("lpNav"); if (nav) nav.hidden = !mgr;
+  const na = $("lpNavActivity"); if (na) na.hidden = !mgr;
 }
 
 function lpSetStatus(msg, kind) {
@@ -2151,28 +2178,65 @@ function lpSetStatus(msg, kind) {
   el.className = "lp-status" + (kind ? " " + kind : "");
 }
 
-// Queue the label on the server. The warehouse bridge picks it up and prints.
-async function lpPrint(codeOverride, label) {
-  const code = lpCleanCode(codeOverride != null ? codeOverride : $("lpCode").value);
-  const qty = codeOverride != null ? 1 : lpQtyVal();
-  if (!code) { lpSetStatus("Scan or type a part number first.", "err"); return; }
-  lpSetStatus("Sending…");
-  $("lpPrint").disabled = true;
+// Send one label to the server (cloud, or PC-bridge fallback). Returns {ok, printed, error}.
+async function lpSendOne(code, qty) {
   try {
     const res = await apiCall("enqueuePrint", { pin: session.pin, code: code, qty: qty });
-    if (res && res.error) { lpSetStatus(res.error, "err"); return; }
-    if (codeOverride == null) { lp.last = { code: code, qty: qty }; $("lpReprint").hidden = false; }
-    if (res && (res.printed || res.via === "cloud" || res.bridgeOnline)) {
-      lpSetStatus((label || ("Printing " + qty + " × " + code)) + " ✓", "ok");
-    } else {
-      lpSetStatus("Queued — will print when the printer is back online.", "warn");
-    }
-    try { const ci = $("lpCode"); ci.focus(); ci.select(); } catch (_) {}
+    if (res && res.error) return { ok: false, error: res.error };
+    return { ok: true, printed: !!(res && (res.printed || res.via === "cloud" || res.bridgeOnline)) };
   } catch (e) {
-    lpSetStatus((e && e.message) ? e.message : "Couldn't reach the server.", "err");
-  } finally {
-    $("lpPrint").disabled = !lpCleanCode($("lpCode").value);
+    return { ok: false, error: (e && e.message) ? e.message : "Couldn't reach the server." };
   }
+}
+
+// Batch: add the current code+qty to the list, then clear for the next scan.
+function lpAddToBatch() {
+  const code = lpCleanCode($("lpCode").value);
+  if (!code) { lpSetStatus("Scan or type a part number first.", "err"); return false; }
+  lp.batch.push({ code: code, qty: lpQtyVal() });
+  $("lpCode").value = ""; $("lpQty").value = "1";
+  lpRenderPreview(); lpRenderBatch();
+  try { $("lpCode").focus(); } catch (_) {}
+  return true;
+}
+function lpRemoveBatch(i) { lp.batch.splice(i, 1); lpRenderBatch(); }
+function lpRenderBatch() {
+  const box = $("lpBatchList"), wrap = $("lpBatch");
+  if (!lp.batch.length) { wrap.hidden = true; box.innerHTML = ""; }
+  else {
+    wrap.hidden = false;
+    box.innerHTML = lp.batch.map((it, i) =>
+      '<div class="lp-bitem"><span><b>' + escapeHtml(it.code) + '</b> × ' + it.qty + '</span>' +
+      '<button class="lp-bx" data-bi="' + i + '" aria-label="Remove">✕</button></div>').join("");
+  }
+  lpUpdatePrintLabel();
+}
+function lpUpdatePrintLabel() {
+  const cur = lpCleanCode($("lpCode").value) ? 1 : 0;
+  const n = lp.batch.length + cur;
+  $("lpPrint").textContent = n > 1 ? ("🖨️ Print " + n + " items") : "🖨️ Print label";
+  $("lpPrint").disabled = n === 0;
+  $("lpAdd").disabled = cur === 0;
+}
+
+// Print everything: the queued batch plus whatever's currently in the box.
+async function lpPrintBatch() {
+  if (lpCleanCode($("lpCode").value)) lpAddToBatch();
+  if (!lp.batch.length) { lpSetStatus("Scan or type a part number first.", "err"); return; }
+  const items = lp.batch.slice();
+  $("lpPrint").disabled = true; $("lpAdd").disabled = true;
+  lpSetStatus("Sending " + items.length + " item" + (items.length === 1 ? "" : "s") + "…");
+  let ok = 0, fail = 0, lastErr = "";
+  for (const it of items) {
+    const r = await lpSendOne(it.code, it.qty);
+    if (r.ok) ok++; else { fail++; lastErr = r.error || "failed"; }
+  }
+  lp.last = items.length === 1 ? { code: items[0].code, qty: items[0].qty } : null;
+  $("lpReprint").hidden = !lp.last;
+  lp.batch = []; lpRenderBatch();
+  if (!fail) lpSetStatus("Printed " + ok + " item" + (ok === 1 ? "" : "s") + " ✓", "ok");
+  else lpSetStatus("Printed " + ok + ", " + fail + " failed — " + lastErr, ok ? "warn" : "err");
+  try { $("lpCode").focus(); } catch (_) {}
 }
 
 function lpReprintLast() {
@@ -2180,13 +2244,17 @@ function lpReprintLast() {
   $("lpCode").value = lp.last.code;
   $("lpQty").value = lp.last.qty;
   lpRenderPreview();
-  lpPrint();
+  lpPrintBatch();
 }
 
-function lpTestPrint() { lpPrint("TEST-123", "Test label queued"); }
+async function lpTestPrint() {
+  lpSetStatus("Sending…");
+  const r = await lpSendOne("TEST-123", 1);
+  lpSetStatus(r.ok ? "Test label queued ✓" : (r.error || "Test failed"), r.ok ? "ok" : "err");
+}
 
 function switchLpTab(name) {
-  document.querySelectorAll(".lp-tab").forEach(b => b.classList.toggle("active", b.dataset.lptab === name));
+  document.querySelectorAll("#lpNav .navbtn").forEach(b => b.classList.toggle("active", b.dataset.lptab === name));
   $("lpPrintView").hidden = name !== "print";
   $("lpActivityView").hidden = name !== "activity";
   if (name === "activity") lpLoadActivity();
@@ -2199,15 +2267,29 @@ async function lpLoadActivity() {
   try {
     const r = await apiCall("getPrintLog", { pin: session.pin });
     if (!r || r.error) { box.innerHTML = '<div class="empty">' + escapeHtml((r && r.error) || "Couldn't load.") + '</div>'; return; }
-    if (!r.jobs || !r.jobs.length) { box.innerHTML = '<div class="empty">No prints yet.</div>'; return; }
-    box.innerHTML = r.jobs.map(function (j) {
-      const st = j.status === "printed" ? "✓ printed" : (j.status === "error" ? "✗ error" : (j.status === "pending" ? "queued" : escapeHtml(j.status)));
-      const cls = j.status === "printed" ? "lp-ok" : (j.status === "error" ? "lp-err2" : "lp-muted");
-      return '<div class="lp-act"><div class="lp-act-main"><b>' + escapeHtml(j.code) + '</b> ×' + j.qty +
-        ' <span class="' + cls + '">' + st + '</span></div><div class="lp-act-sub">' +
-        escapeHtml(j.who) + ' · ' + escapeHtml(j.at || '') + (j.error ? ' · ' + escapeHtml(j.error) : '') + '</div></div>';
-    }).join("");
+    lp.actJobs = r.jobs || [];
+    lpRenderActivity();
   } catch (e) { box.innerHTML = '<div class="empty">Couldn\'t load.</div>'; }
+}
+
+function lpRenderActivity() {
+  const box = $("lpActivityBody");
+  let jobs = (lp.actJobs || []).slice();
+  const q = (lp.actSearch || "").trim().toLowerCase();
+  if (q) jobs = jobs.filter(j => (String(j.code || "").toLowerCase().indexOf(q) >= 0) || (String(j.who || "").toLowerCase().indexOf(q) >= 0));
+  const sort = lp.actSort || "recent";
+  if (sort === "day") jobs.sort((a, b) => String(b.day || "").localeCompare(String(a.day || "")) || (b.id - a.id));
+  else if (sort === "person") jobs.sort((a, b) => String(a.who || "").localeCompare(String(b.who || "")) || (b.id - a.id));
+  else if (sort === "part") jobs.sort((a, b) => String(a.code || "").localeCompare(String(b.code || ""), undefined, { numeric: true }) || (b.id - a.id));
+  else jobs.sort((a, b) => b.id - a.id);
+  if (!jobs.length) { box.innerHTML = '<div class="empty">' + (lp.actJobs && lp.actJobs.length ? "No matches." : "No prints yet.") + '</div>'; return; }
+  box.innerHTML = jobs.map(function (j) {
+    const st = j.status === "printed" ? "✓ printed" : (j.status === "error" ? "✗ error" : (j.status === "pending" ? "queued" : escapeHtml(j.status)));
+    const cls = j.status === "printed" ? "lp-ok" : (j.status === "error" ? "lp-err2" : "lp-muted");
+    return '<div class="lp-act"><div class="lp-act-main"><b>' + escapeHtml(j.code) + '</b> × ' + j.qty +
+      ' <span class="' + cls + '">' + st + '</span></div><div class="lp-act-sub">' +
+      escapeHtml(j.who) + ' · ' + escapeHtml(j.at || '') + (j.error ? ' · ' + escapeHtml(j.error) : '') + '</div></div>';
+  }).join("");
 }
 
 // Manager-only: daily print usage vs the 100/day cloud limit.
@@ -3919,11 +4001,13 @@ $("lpCode").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); lpRenderPreview(); try { $("lpQty").focus(); $("lpQty").select(); } catch (_) {} }
 });
 $("lpQty").addEventListener("input", lpRenderPreview);
-$("lpQty").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); lpPrint(); } });
+$("lpQty").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); lpPrintBatch(); } });
 $("lpMinus").addEventListener("click", () => { $("lpQty").value = Math.max(1, lpQtyVal() - 1); lpRenderPreview(); });
 $("lpPlus").addEventListener("click", () => { $("lpQty").value = Math.min(999, lpQtyVal() + 1); lpRenderPreview(); });
-$("lpPrint").addEventListener("click", () => lpPrint());
+$("lpAdd").addEventListener("click", lpAddToBatch);
+$("lpPrint").addEventListener("click", lpPrintBatch);
 $("lpReprint").addEventListener("click", lpReprintLast);
+$("lpBatchList").addEventListener("click", (e) => { const b = e.target.closest(".lp-bx"); if (b) lpRemoveBatch(parseInt(b.dataset.bi, 10)); });
 $("lpConnect").addEventListener("click", lpDetectPrinter);
 $("lpTest").addEventListener("click", lpTestPrint);
 $("lpShowZpl").addEventListener("click", () => {
@@ -3937,7 +4021,9 @@ $("lpCopyToken").addEventListener("click", () => {
 });
 $("lpcSave").addEventListener("click", lpSaveCloudSettings);
 $("lpUseRefresh").addEventListener("click", lpLoadUsage);
-document.querySelectorAll(".lp-tab").forEach(b => b.addEventListener("click", () => switchLpTab(b.dataset.lptab)));
+document.querySelectorAll("#lpNav .navbtn").forEach(b => b.addEventListener("click", () => switchLpTab(b.dataset.lptab)));
+$("lpActSearch").addEventListener("input", () => { lp.actSearch = $("lpActSearch").value; lpRenderActivity(); });
+$("lpActSort").addEventListener("change", () => { lp.actSort = $("lpActSort").value; lpRenderActivity(); });
 $("eomLogPeriod").addEventListener("change", () => { state.eomLogPeriod = $("eomLogPeriod").value; renderEomLog(); });
 document.querySelectorAll(".bc-tab").forEach(b => b.addEventListener("click", () => switchBoxTab(b.dataset.bctab)));
 $("bcSaveBtn").addEventListener("click", saveBoxCountNow);

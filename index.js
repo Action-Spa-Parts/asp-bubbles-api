@@ -30,7 +30,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '27';
+const APP_VERSION = '28';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1466,7 +1466,8 @@ async function getPrintLog(who) {
   if (!isManager(who)) return { error: 'Manager only' };
   const { rows } = await pool.query(
     "SELECT id, code, qty, status, COALESCE(requested_by,'(unknown)') AS who, " +
-    "to_char(created_at AT TIME ZONE 'America/Los_Angeles', 'Mon DD HH12:MI AM') AS at, error " +
+    "to_char(created_at AT TIME ZONE 'America/Los_Angeles', 'Mon DD HH12:MI AM') AS at, " +
+    "(created_at AT TIME ZONE 'America/Los_Angeles')::date::text AS day, error " +
     "FROM print_jobs ORDER BY id DESC LIMIT 200");
   return { jobs: rows };
 }
