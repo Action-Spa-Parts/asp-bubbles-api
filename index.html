@@ -1071,6 +1071,11 @@
             <button class="ghost lp-mini" id="lpShowZpl">Show ZPL</button>
           </p>
           <pre id="lpZpl" hidden></pre>
+          <div id="lpUsageRow" hidden style="margin:6px 0; padding:8px 10px; background:var(--accent-soft); border-radius:8px;">
+            <div style="font-weight:600;">Cloud prints today: <span id="lpUseToday">—</span> / 100 <button class="ghost lp-mini" id="lpUseRefresh">Refresh</button></div>
+            <div id="lpUseBy" style="font-size:12px; margin-top:4px;"></div>
+            <div id="lpUseDays" style="font-size:12px; margin-top:6px; color:var(--muted);"></div>
+          </div>
           <div id="lpTokenRow" hidden style="margin:6px 0 4px; padding:8px 10px; background:var(--accent-soft); border-radius:8px;">
             <div style="font-weight:600; margin-bottom:4px;">Print bridge token <span style="font-weight:400;">(managers) — paste into the warehouse PC script:</span></div>
             <code id="lpToken" style="word-break:break-all; font-size:12px;">—</code>
@@ -2035,6 +2040,7 @@ function initLabelPrinter() {
   setTimeout(() => { try { $("lpCode").focus(); } catch (_) {} }, 60);
   lpDetectPrinter();
   lpLoadCloudSettings();
+  lpLoadUsage();
 }
 
 // Strip characters that aren't valid in a scanned part number / would break ZPL.
@@ -2154,6 +2160,28 @@ function lpReprintLast() {
 }
 
 function lpTestPrint() { lpPrint("TEST-123", "Test label queued"); }
+
+// Manager-only: daily print usage vs the 100/day cloud limit.
+async function lpLoadUsage() {
+  const row = $("lpUsageRow");
+  if (!row) return;
+  try {
+    const u = await apiCall("getPrintUsage", { pin: session.pin });
+    if (!u || u.error) { row.hidden = true; return; }   // not a manager
+    row.hidden = false;
+    const today = u.today || 0, limit = u.limit || 100;
+    const tEl = $("lpUseToday");
+    tEl.textContent = today;
+    tEl.style.color = today >= limit ? "var(--danger)" : (today >= limit * 0.8 ? "var(--warn)" : "var(--good)");
+    tEl.style.fontWeight = "700";
+    $("lpUseBy").innerHTML = (u.byUser && u.byUser.length)
+      ? "Today by person: " + u.byUser.map(x => escapeHtml(x.name) + " — " + x.n).join(" · ")
+      : "No prints yet today.";
+    $("lpUseDays").innerHTML = (u.days && u.days.length)
+      ? "Recent days: " + u.days.map(d => escapeHtml(d.day) + " (" + d.n + ")").join(" · ")
+      : "";
+  } catch (_) { row.hidden = true; }
+}
 
 // Manager-only cloud-printing settings (Zebra SendFileToPrinter).
 async function lpLoadCloudSettings() {
@@ -3859,6 +3887,7 @@ $("lpCopyToken").addEventListener("click", () => {
   if (t && navigator.clipboard) navigator.clipboard.writeText(t).then(() => lpSetStatus("Token copied ✓", "ok"), () => {});
 });
 $("lpcSave").addEventListener("click", lpSaveCloudSettings);
+$("lpUseRefresh").addEventListener("click", lpLoadUsage);
 $("eomLogPeriod").addEventListener("change", () => { state.eomLogPeriod = $("eomLogPeriod").value; renderEomLog(); });
 document.querySelectorAll(".bc-tab").forEach(b => b.addEventListener("click", () => switchBoxTab(b.dataset.bctab)));
 $("bcSaveBtn").addEventListener("click", saveBoxCountNow);

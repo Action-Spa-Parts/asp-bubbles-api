@@ -30,7 +30,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '25';
+const APP_VERSION = '26';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1447,6 +1447,20 @@ async function getPrintStatus(who) {
   return out;
 }
 
+// Manager view: how many labels were printed per day (= cloud API calls/day, to
+// watch the 100/day free-tier limit) + today's per-person breakdown. US Pacific.
+async function getPrintUsage(who) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const tz = 'America/Los_Angeles';
+  const today = await pool.query(
+    "SELECT COUNT(*)::int AS n FROM print_jobs WHERE (created_at AT TIME ZONE $1)::date = (now() AT TIME ZONE $1)::date", [tz]);
+  const days = await pool.query(
+    "SELECT (created_at AT TIME ZONE $1)::date::text AS day, COUNT(*)::int AS n FROM print_jobs WHERE created_at >= now() - interval '14 days' GROUP BY 1 ORDER BY 1 DESC", [tz]);
+  const byUser = await pool.query(
+    "SELECT COALESCE(requested_by,'(unknown)') AS name, COUNT(*)::int AS n FROM print_jobs WHERE (created_at AT TIME ZONE $1)::date = (now() AT TIME ZONE $1)::date GROUP BY 1 ORDER BY 2 DESC", [tz]);
+  return { today: today.rows[0].n, limit: 100, days: days.rows, byUser: byUser.rows };
+}
+
 // ----- Bridge-facing (authenticated by the bridge token, not a user) -----
 async function currentBridgeToken() {
   const { rows } = await pool.query('SELECT token FROM print_bridge WHERE id = 1');
@@ -1902,6 +1916,7 @@ app.post('/', async (req, res) => {
         case 'getPrintStatus': out = await getPrintStatus(who); break;
         case 'getCloudSettings': out = await getCloudSettings(who); break;
         case 'setCloudSettings': out = await setCloudSettings(who, body); break;
+        case 'getPrintUsage':    out = await getPrintUsage(who); break;
         default:                  out = { error: 'Unknown action: ' + action };
       }
     }
