@@ -1472,33 +1472,12 @@
 
         <hr style="border:none; border-top:1px solid var(--border); margin:20px 0;">
         <div class="ftitle" style="margin-bottom:4px;">Part descriptions</div>
-        <p class="muted" style="font-size:12px; margin:0 0 10px;">The text printed above the barcode comes from the Distribution One export (SKU → description). Upload the latest CSV here, or set the weekly job to push it automatically (below).</p>
-        <div id="lblPartInfo" class="muted" style="font-size:13px; margin-bottom:10px;"></div>
-        <input type="file" id="lblCsvFile" accept=".csv,text/csv" hidden>
+        <p class="muted" style="font-size:12px; margin:0 0 8px;">The text printed above the barcode comes from Distribution One (SKU → description). It refreshes automatically every <strong>Saturday 2:37 AM</strong> — the app queries Distribution One on Railway, no PC or upload needed.</p>
+        <div id="lblPartInfo" class="muted" style="font-size:13px; margin-bottom:8px;"></div>
         <div class="formbtns" style="justify-content:flex-start;">
-          <button class="primary" id="lblCsvBtn">Upload CSV…</button>
+          <button class="ghost" id="lblSrcNow">Refresh now</button>
         </div>
-        <div style="margin-top:18px;">
-          <div class="ftitle" style="margin-bottom:4px;">Weekly auto-refresh (runs on Railway)</div>
-          <p class="muted" style="font-size:12px; margin:0 0 8px;">Every <strong>Saturday 2:37 AM</strong> the app refreshes descriptions automatically — no PC, no push. When <code>ERP_MCP_URL</code> is set on Railway it queries Distribution One directly; otherwise it can pull a published CSV link.</p>
-          <div id="lblSrcRow">
-            <div class="field"><label>CSV URL (fallback if not querying the ERP directly)</label><input type="text" id="lblSrcUrl" placeholder="https://…/sku_descriptions.csv"></div>
-            <div class="formbtns" style="justify-content:flex-start;">
-              <button class="primary" id="lblSrcSave">Save URL</button>
-            </div>
-          </div>
-          <div class="formbtns" style="justify-content:flex-start; margin-top:8px;">
-            <button class="ghost" id="lblSrcNow">Refresh now</button>
-          </div>
-          <div id="lblAutoInfo" class="muted" style="font-size:12px; margin-top:8px;"></div>
-        </div>
-
-        <details style="margin-top:16px;">
-          <summary class="muted" style="font-size:12px; cursor:pointer; font-weight:600;">Push option (if a job sends the CSV to us instead)</summary>
-          <p class="muted" style="font-size:12px; margin:8px 0 6px;">Alternatively a job can POST the CSV here as JSON <code>{ "action":"importPartDescriptions", "token":"…", "csv":"&lt;file contents&gt;" }</code>:</p>
-          <div style="font-size:12px; word-break:break-all;"><strong>URL:</strong> <span id="lblImportUrl"></span></div>
-          <div style="font-size:12px; word-break:break-all; margin-top:4px;"><strong>Token:</strong> <code id="lblImportToken" style="font-size:11px;"></code></div>
-        </details>
+        <div id="lblAutoInfo" class="muted" style="font-size:12px; margin-top:8px;"></div>
       </div>
 
       <!-- Notifications: manager master control -->
@@ -2340,31 +2319,20 @@ async function renderLabelAdmin() {
     $("lblUsage").textContent = "Used today: " + usage.today + (cap != null ? (" of " + cap + " (your cap)") : " — no cap set (Zebra free tier is 100/day).");
   } else { $("lblUsage").textContent = ""; $("lblLimit").value = ""; }
 
-  // Part descriptions info + the import URL/token for the weekly job.
-  $("lblImportUrl").textContent = location.origin + "/";
+  // Part descriptions: loaded count + when the weekly Railway refresh last ran.
   let info = null;
   try { info = await apiCall("getPartImportInfo", { pin: session.pin }); } catch (_) {}
   if (info && !info.error) {
-    $("lblImportToken").textContent = info.token || "(none)";
-    $("lblSrcUrl").value = info.sourceUrl || "";
     if (info.count > 0) {
       const when = info.lastImport ? new Date(info.lastImport).toLocaleString() : "unknown";
       $("lblPartInfo").textContent = Number(info.count).toLocaleString() + " descriptions loaded · last updated " + when;
     } else {
-      $("lblPartInfo").textContent = "No descriptions loaded yet — labels print without a description line until you upload the CSV.";
+      $("lblPartInfo").textContent = "No descriptions loaded yet.";
     }
     const auto = info.lastAuto ? ("last auto-run " + info.lastAuto) : "not auto-run yet";
-    const srcRow = document.getElementById("lblSrcRow");
-    if (info.erpConfigured) {
-      // Direct ERP query mode — the CSV URL is just an unused fallback, hide it.
-      if (srcRow) srcRow.style.display = "none";
-      $("lblAutoInfo").textContent = "Auto-refresh ON · queries Distribution One directly every Saturday 2:37 AM · " + auto + ".";
-    } else {
-      if (srcRow) srcRow.style.display = "";
-      $("lblAutoInfo").textContent = info.sourceUrl
-        ? ("Auto-refresh ON (from CSV URL) · " + auto + ".")
-        : "Auto-refresh OFF — set ERP_MCP_URL on Railway (direct ERP), or paste a CSV URL above.";
-    }
+    $("lblAutoInfo").textContent = info.erpConfigured
+      ? ("Auto-refresh ON · queries Distribution One every Saturday 2:37 AM · " + auto + ".")
+      : "Auto-refresh OFF — set ERP_MCP_URL on Railway to enable the weekly Distribution One refresh.";
   }
 }
 
@@ -4594,9 +4562,6 @@ $("mNotifyEnableDevice").addEventListener("click", async () => { await enablePus
 $("lblLimitSave").addEventListener("click", saveLabelLimit);
 $("lblPrAdd").addEventListener("click", lpSavePrinter);
 $("lblPrCancel").addEventListener("click", cancelEditPrinter);
-$("lblCsvBtn").addEventListener("click", () => $("lblCsvFile").click());
-$("lblCsvFile").addEventListener("change", (e) => { const f = e.target.files && e.target.files[0]; uploadPartCsv(f); e.target.value = ""; });
-$("lblSrcSave").addEventListener("click", saveLabelSrcUrl);
 $("lblSrcNow").addEventListener("click", refreshPartsNow);
 
 $("aClose").addEventListener("click", () => { $("award").hidden = true; });
