@@ -2016,13 +2016,10 @@ function fillNameOptions(sel, names, allLabel) {
   sel.value = cur;
 }
 
-// Build activity-feed row HTML from a list of award entries. Shared by the
-// manager "All activity" feed and the employee "Everyone else" feed.
-// opts.withDelete adds the manager-only delete button.
-function activityRowsHtml(list, opts) {
-  opts = opts || {};
-  // Grey out reversal entries + their matched originals (within the shown set).
-  const cancel = {};
+// Figure out which entries are reversed (greyed) across the whole shown set, so
+// an Undo and its matched original both grey out even across day groups.
+function computeCancelled(list) {
+  const cancel = {}, result = new Map();
   list.forEach(a => {
     const m = String(a.Metric || "");
     if (m.indexOf("Undo:") === 0) {
@@ -2030,28 +2027,27 @@ function activityRowsHtml(list, opts) {
       cancel[key] = (cancel[key] || 0) + 1;
     }
   });
-  return list.slice(0, 300).map(a => {
-    const amt = Number(a.Amount) || 0;
-    const name = escapeHtml(a.Name || "");
-    const metric = String(a.Metric || "");
+  list.forEach(a => {
+    const m = String(a.Metric || ""), amt = Number(a.Amount) || 0;
     let cancelled = false;
-    if (metric.indexOf("Undo:") === 0) {
-      cancelled = true;
-    } else {
-      const key = a.Name + "|" + metric + "|" + amt;
-      if (cancel[key] > 0) { cancel[key]--; cancelled = true; }
-    }
-    let label;
-    if (metric.indexOf("Redeemed:") === 0) {
-      label = name + " redeemed " + escapeHtml(metric.replace("Redeemed:", "").trim());
-    } else if (amt < 0) {
-      label = "Deducted " + Math.abs(amt) + " from " + name + (metric ? " — " + escapeHtml(metric) : "");
-    } else {
-      label = "Gave " + name + " " + amt + (metric ? " for " + escapeHtml(metric) : "");
-    }
-    const tag = cancelled ? ` <span class="muted" style="font-size:11px;">(reversed)</span>` : "";
-    const delBtn = (opts.withDelete && a.Id) ? `<button class="del-btn" data-del="${a.Id}" title="Delete this entry">🗑</button>` : "";
-    return `
+    if (m.indexOf("Undo:") === 0) cancelled = true;
+    else { const key = a.Name + "|" + m + "|" + amt; if (cancel[key] > 0) { cancel[key]--; cancelled = true; } }
+    result.set(a, cancelled);
+  });
+  return result;
+}
+
+function activityRowHtml(a, cancelled, opts) {
+  const amt = Number(a.Amount) || 0;
+  const name = escapeHtml(a.Name || "");
+  const metric = String(a.Metric || "");
+  let label;
+  if (metric.indexOf("Redeemed:") === 0) label = name + " redeemed " + escapeHtml(metric.replace("Redeemed:", "").trim());
+  else if (amt < 0) label = "Deducted " + Math.abs(amt) + " from " + name + (metric ? " — " + escapeHtml(metric) : "");
+  else label = "Gave " + name + " " + amt + (metric ? " for " + escapeHtml(metric) : "");
+  const tag = cancelled ? ` <span class="muted" style="font-size:11px;">(reversed)</span>` : "";
+  const delBtn = (opts.withDelete && a.Id) ? `<button class="del-btn" data-del="${a.Id}" title="Delete this entry">🗑</button>` : "";
+  return `
       <div class="txn-row${cancelled ? " cancelled" : ""}">
         <div>
           <div class="tlabel">${label}${tag}</div>
@@ -2062,6 +2058,23 @@ function activityRowsHtml(list, opts) {
           ${delBtn}
         </div>
       </div>`;
+}
+
+// Build the activity feed grouped into collapsible day sections, each showing
+// the number of actions that day (like the Label Printer + Checklist). Days
+// start collapsed; they auto-open when a name/date filter is active.
+function activityByDayHtml(list, opts, autoOpen) {
+  opts = opts || {};
+  const capped = list.slice(0, 300);
+  const cancelledMap = computeCancelled(capped);
+  const order = [], byDay = {};
+  capped.forEach(a => { const d = localYMD(a.Timestamp) || ""; if (!byDay[d]) { byDay[d] = []; order.push(d); } byDay[d].push(a); });
+  return order.map(d => {
+    const rows = byDay[d];
+    const body = rows.map(a => activityRowHtml(a, cancelledMap.get(a), opts)).join("");
+    const head = (d ? escapeHtml(lpDayLabel(d)) : "Undated") + " · " + rows.length + " action" + (rows.length === 1 ? "" : "s");
+    return '<details class="lp-day"' + (autoOpen ? " open" : "") + '><summary>' + head +
+      '</summary><div class="lp-day-body">' + body + '</div></details>';
   }).join("");
 }
 
@@ -2094,7 +2107,7 @@ function renderActivity() {
       el.innerHTML = `<div class="empty"><h3>No matches</h3><div>Nothing for that name and/or date. Tap Clear to reset.</div></div>`;
       return;
     }
-    el.innerHTML = activityRowsHtml(filtered, { withDelete: true });
+    el.innerHTML = activityByDayHtml(filtered, { withDelete: true }, !!(fName || fDate));
     el.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => deleteTransaction(parseInt(b.dataset.del, 10))));
     return;
   }
@@ -2137,7 +2150,7 @@ function renderActivity() {
     (!fName || String(a.Name || "") === fName) &&
     (!fDate || localYMD(a.Timestamp) === fDate));
   ol.innerHTML = filteredOthers.length
-    ? activityRowsHtml(filteredOthers, { withDelete: false })
+    ? activityByDayHtml(filteredOthers, { withDelete: false }, !!(fName || fDate))
     : `<div class="empty"><h3>No matches</h3><div>Nothing for that name and/or date. Tap Clear to reset.</div></div>`;
 }
 
