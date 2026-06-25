@@ -1442,9 +1442,24 @@
         <div class="formbtns" style="justify-content:flex-start;">
           <button class="primary" id="lblCsvBtn">Upload CSV…</button>
         </div>
-        <details style="margin-top:14px;">
-          <summary class="muted" style="font-size:12px; cursor:pointer; font-weight:600;">Automatic weekly update (for the data job)</summary>
-          <p class="muted" style="font-size:12px; margin:8px 0 6px;">Have the Saturday job POST the CSV to this URL as JSON <code>{ "action":"importPartDescriptions", "token":"…", "csv":"&lt;file contents&gt;" }</code>:</p>
+        <div style="margin-top:18px;">
+          <div class="ftitle" style="margin-bottom:4px;">Weekly auto-refresh (runs on Railway)</div>
+          <p class="muted" style="font-size:12px; margin:0 0 8px;">Every <strong>Saturday 2:37 AM</strong> the app refreshes descriptions automatically — no PC, no push. When <code>ERP_MCP_URL</code> is set on Railway it queries Distribution One directly; otherwise it can pull a published CSV link.</p>
+          <div id="lblSrcRow">
+            <div class="field"><label>CSV URL (fallback if not querying the ERP directly)</label><input type="text" id="lblSrcUrl" placeholder="https://…/sku_descriptions.csv"></div>
+            <div class="formbtns" style="justify-content:flex-start;">
+              <button class="primary" id="lblSrcSave">Save URL</button>
+            </div>
+          </div>
+          <div class="formbtns" style="justify-content:flex-start; margin-top:8px;">
+            <button class="ghost" id="lblSrcNow">Refresh now</button>
+          </div>
+          <div id="lblAutoInfo" class="muted" style="font-size:12px; margin-top:8px;"></div>
+        </div>
+
+        <details style="margin-top:16px;">
+          <summary class="muted" style="font-size:12px; cursor:pointer; font-weight:600;">Push option (if a job sends the CSV to us instead)</summary>
+          <p class="muted" style="font-size:12px; margin:8px 0 6px;">Alternatively a job can POST the CSV here as JSON <code>{ "action":"importPartDescriptions", "token":"…", "csv":"&lt;file contents&gt;" }</code>:</p>
           <div style="font-size:12px; word-break:break-all;"><strong>URL:</strong> <span id="lblImportUrl"></span></div>
           <div style="font-size:12px; word-break:break-all; margin-top:4px;"><strong>Token:</strong> <code id="lblImportToken" style="font-size:11px;"></code></div>
         </details>
@@ -2281,13 +2296,41 @@ async function renderLabelAdmin() {
   try { info = await apiCall("getPartImportInfo", { pin: session.pin }); } catch (_) {}
   if (info && !info.error) {
     $("lblImportToken").textContent = info.token || "(none)";
+    $("lblSrcUrl").value = info.sourceUrl || "";
     if (info.count > 0) {
       const when = info.lastImport ? new Date(info.lastImport).toLocaleString() : "unknown";
       $("lblPartInfo").textContent = Number(info.count).toLocaleString() + " descriptions loaded · last updated " + when;
     } else {
       $("lblPartInfo").textContent = "No descriptions loaded yet — labels print without a description line until you upload the CSV.";
     }
+    const auto = info.lastAuto ? ("last auto-run " + info.lastAuto) : "not auto-run yet";
+    const srcRow = document.getElementById("lblSrcRow");
+    if (info.erpConfigured) {
+      // Direct ERP query mode — the CSV URL is just an unused fallback, hide it.
+      if (srcRow) srcRow.style.display = "none";
+      $("lblAutoInfo").textContent = "Auto-refresh ON · queries Distribution One directly every Saturday 2:37 AM · " + auto + ".";
+    } else {
+      if (srcRow) srcRow.style.display = "";
+      $("lblAutoInfo").textContent = info.sourceUrl
+        ? ("Auto-refresh ON (from CSV URL) · " + auto + ".")
+        : "Auto-refresh OFF — set ERP_MCP_URL on Railway (direct ERP), or paste a CSV URL above.";
+    }
   }
+}
+
+async function saveLabelSrcUrl() {
+  const res = await apiCall("setPartSourceUrl", { pin: session.pin, url: $("lblSrcUrl").value });
+  if (res && res.error) { adminError(res.error); return; }
+  await renderLabelAdmin();
+}
+
+async function refreshPartsNow() {
+  $("lblAutoInfo").textContent = "Fetching from the URL…";
+  const res = await apiCall("refreshPartsNow", { pin: session.pin });
+  if (res && res.error) { $("lblAutoInfo").textContent = "Failed: " + res.error; return; }
+  if (res && res.skipped) { $("lblAutoInfo").textContent = "No URL set."; return; }
+  await renderLabelAdmin();
+  alert("Refreshed " + Number((res && res.count) || 0).toLocaleString() + " descriptions from the URL ✓");
 }
 
 async function saveLabelLimit() {
@@ -4416,6 +4459,8 @@ $("mNotifyEnableDevice").addEventListener("click", async () => { await enablePus
 $("lblLimitSave").addEventListener("click", saveLabelLimit);
 $("lblCsvBtn").addEventListener("click", () => $("lblCsvFile").click());
 $("lblCsvFile").addEventListener("change", (e) => { const f = e.target.files && e.target.files[0]; uploadPartCsv(f); e.target.value = ""; });
+$("lblSrcSave").addEventListener("click", saveLabelSrcUrl);
+$("lblSrcNow").addEventListener("click", refreshPartsNow);
 
 $("aClose").addEventListener("click", () => { $("award").hidden = true; });
 

@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '44';
+const APP_VERSION = '45';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -321,6 +321,12 @@ async function ensureSchema() {
       count       INTEGER NOT NULL DEFAULT 0
     )`);
   await pool.query(`INSERT INTO part_meta (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+  // Weekly auto-refresh: a Railway-side worker fetches this URL every Saturday
+  // 2:37 AM (Pacific) and reloads the descriptions. last_auto guards against
+  // double-runs / restarts. (Railway can't reach the on-prem ERP, so it pulls a
+  // published CSV rather than querying Distribution One directly.)
+  await pool.query(`ALTER TABLE part_meta ADD COLUMN IF NOT EXISTS source_url TEXT`);
+  await pool.query(`ALTER TABLE part_meta ADD COLUMN IF NOT EXISTS last_auto DATE`);
   {
     const { rows: pm } = await pool.query('SELECT token FROM part_meta WHERE id = 1');
     if (!pm.length || !pm[0].token) {
@@ -1773,27 +1779,13 @@ async function lookupDescription(code) {
   return rows.length ? (rows[0].description || '') : '';
 }
 
-// Replace the whole description set from an uploaded CSV (full weekly snapshot).
-// Auth: the import token (headless weekly job) OR a logged-in manager.
-async function importPartDescriptions(body) {
-  body = body || {};
-  const { rows: pm } = await pool.query('SELECT token FROM part_meta WHERE id = 1');
-  const tok = pm.length ? pm[0].token : '';
-  let authed = !!(body.token && tok && body.token === tok);
-  if (!authed) { const who = await resolveAuth(body); authed = isManager(who); }
-  if (!authed) return { error: 'Not authorized' };
-
-  let items = [];
-  if (typeof body.csv === 'string' && body.csv.length) items = parseSkuCsv(body.csv);
-  else if (Array.isArray(body.rows)) {
-    items = body.rows.map(r => ({ code: String(r.code || '').trim(), description: String(r.description || '').trim() })).filter(r => r.code);
-  }
-  if (!items.length) return { error: 'No rows found in the upload.' };
-
+// Core: replace the whole description set in one transaction. Shared by the
+// manual/pushed import and the weekly URL refresh.
+async function replacePartDescriptions(items) {
   const map = new Map();
-  for (const it of items) map.set(it.code, it.description);   // de-dupe, last wins
+  for (const it of items) { const code = String(it.code || '').trim(); if (code) map.set(code, String(it.description || '').trim()); }
   const codes = [...map.keys()];
-
+  if (!codes.length) return { ok: false, error: 'No rows found.' };
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -1811,18 +1803,175 @@ async function importPartDescriptions(body) {
     await client.query('COMMIT');
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch (_) {}
-    return { error: 'Import failed: ' + (e.message || e) };
+    return { ok: false, error: 'Import failed: ' + (e.message || e) };
   } finally {
     client.release();
   }
   return { ok: true, count: codes.length };
 }
 
+// Replace the whole description set from an uploaded CSV (full snapshot).
+// Auth: the import token (headless job) OR a logged-in manager.
+async function importPartDescriptions(body) {
+  body = body || {};
+  const { rows: pm } = await pool.query('SELECT token FROM part_meta WHERE id = 1');
+  const tok = pm.length ? pm[0].token : '';
+  let authed = !!(body.token && tok && body.token === tok);
+  if (!authed) { const who = await resolveAuth(body); authed = isManager(who); }
+  if (!authed) return { error: 'Not authorized' };
+
+  let items = [];
+  if (typeof body.csv === 'string' && body.csv.length) items = parseSkuCsv(body.csv);
+  else if (Array.isArray(body.rows)) {
+    items = body.rows.map(r => ({ code: String(r.code || '').trim(), description: String(r.description || '').trim() })).filter(r => r.code);
+  }
+  if (!items.length) return { error: 'No rows found in the upload.' };
+  const res = await replacePartDescriptions(items);
+  return res.ok ? res : { error: res.error };
+}
+
+// ----- ERP (Distribution One) via MCP, queried directly from Railway -----
+// The connector is a remote MCP server over SSE: GET ERP_MCP_URL streams events;
+// the first is an "endpoint" giving a POST URL for JSON-RPC; responses arrive
+// back on the SSE stream. Auth = the ?key in the URL (set as a Railway env var).
+const ERP_ITEM_QUERY = process.env.ERP_ITEM_QUERY || 'FOR EACH item WHERE company_it = "ASPL" AND item <> ""';
+
+async function erpFetchItems(query, columns) {
+  const sseUrl = process.env.ERP_MCP_URL;
+  if (!sseUrl) throw new Error('ERP_MCP_URL is not set');
+  const origin = new URL(sseUrl).origin;
+  const ac = new AbortController();
+  const res = await fetch(sseUrl, { headers: { Accept: 'text/event-stream' }, signal: ac.signal });
+  if (!res.ok || !res.body) throw new Error('ERP SSE connect failed (' + res.status + ')');
+
+  let postUrl = null, nextId = 1;
+  const pending = new Map();
+  let onEndpoint; const endpointReady = new Promise(r => { onEndpoint = r; });
+
+  // Background reader: parse SSE frames, resolve JSON-RPC responses by id.
+  (async () => {
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true }).replace(/\r/g, '');   // normalize CRLF → LF
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          let ev = 'message', data = '';
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('event:')) ev = line.slice(6).trim();
+            else if (line.startsWith('data:')) data += line.slice(5).trim();
+          }
+          if (ev === 'endpoint') { postUrl = origin + data; onEndpoint(); }
+          else if (ev === 'message' && data) {
+            try { const m = JSON.parse(data); if (m.id != null && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } } catch (_) {}
+          }
+        }
+      }
+    } catch (_) { /* aborted or closed */ }
+  })();
+
+  const withTimeout = () => new Promise((_, rej) => setTimeout(() => rej(new Error('ERP request timed out')), 90000));
+  async function rpc(method, params) {
+    const id = nextId++;
+    const resp = new Promise(resolve => pending.set(id, resolve));
+    const r = await fetch(postUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) });
+    if (r.status !== 202 && !r.ok) throw new Error('ERP POST ' + method + ' failed (' + r.status + ')');
+    return Promise.race([resp, withTimeout()]);
+  }
+  async function notify(method) {
+    await fetch(postUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', method, params: {} }) });
+  }
+
+  try {
+    await Promise.race([endpointReady, withTimeout()]);
+    await rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'asp-warehouse', version: '1.0' } });
+    await notify('notifications/initialized');
+
+    const items = [];
+    const PAGE = 5000;
+    for (let skip = 0; skip <= 200000; skip += PAGE) {
+      const m = await rpc('tools/call', { name: 'dq_read', arguments: { query, columns, skip, take: PAGE } });
+      if (m.error) throw new Error(m.error.message || 'dq_read error');
+      const txt = m.result && m.result.content && m.result.content[0] && m.result.content[0].text;
+      const parsed = txt ? JSON.parse(txt) : (m.result && m.result.structuredContent) || {};
+      const recs = parsed.records || [];
+      for (const rec of recs) {
+        const code = String(rec.item || '').trim();
+        if (!code) continue;
+        const arr = Array.isArray(rec.descr) ? rec.descr : [rec.descr];
+        const description = arr.map(x => x == null ? '' : String(x)).join('').trim();
+        items.push({ code, description });
+      }
+      if (recs.length < PAGE) break;
+    }
+    return items;
+  } finally {
+    try { ac.abort(); } catch (_) {}
+  }
+}
+
+// Pull the full item list from the ERP and replace the description set.
+async function refreshPartsFromErp() {
+  if (!process.env.ERP_MCP_URL) return { skipped: true, reason: 'ERP_MCP_URL not set' };
+  let items;
+  try { items = await erpFetchItems(ERP_ITEM_QUERY, 'item,descr'); }
+  catch (e) { return { ok: false, error: (e && e.message) ? e.message : 'ERP query failed' }; }
+  if (!items.length) return { ok: false, error: 'ERP returned no items' };
+  return await replacePartDescriptions(items);
+}
+
+// One refresh entry point: query the ERP directly if configured, else fall back
+// to a published CSV URL.
+async function runWeeklyRefresh() {
+  if (process.env.ERP_MCP_URL) return await refreshPartsFromErp();
+  return await refreshPartsFromUrl();
+}
+
+// The weekly Railway worker: fetch the published CSV and reload descriptions.
+async function refreshPartsFromUrl() {
+  const { rows } = await pool.query('SELECT source_url FROM part_meta WHERE id = 1');
+  const url = rows.length ? (rows[0].source_url || '') : '';
+  if (!url) return { skipped: true, reason: 'no source URL set' };
+  let text = '';
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return { ok: false, error: 'fetch returned ' + r.status };
+    text = await r.text();
+  } catch (e) { return { ok: false, error: (e && e.message) ? e.message : 'fetch failed' }; }
+  const items = parseSkuCsv(text);
+  if (!items.length) return { ok: false, error: 'no rows parsed from the CSV at that URL' };
+  return await replacePartDescriptions(items);
+}
+
+// Manager sets the weekly-refresh source URL (where the published CSV lives).
+async function setPartSourceUrl(who, url) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const u = String(url || '').trim();
+  if (u && !/^https?:\/\//i.test(u)) return { error: 'Enter a full http(s) URL, or leave blank to turn auto-refresh off.' };
+  await pool.query('UPDATE part_meta SET source_url = $1 WHERE id = 1', [u || null]);
+  return { ok: true, sourceUrl: u };
+}
+
+// Manager-triggered "run the refresh now" (test without waiting for Saturday).
+async function refreshPartsNow(who) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  return await runWeeklyRefresh();
+}
+
 async function getPartImportInfo(who) {
   if (!isManager(who)) return { error: 'Manager only' };
-  const { rows } = await pool.query('SELECT token, last_import, count FROM part_meta WHERE id = 1');
+  const { rows } = await pool.query('SELECT token, last_import, count, source_url, last_auto FROM part_meta WHERE id = 1');
   const m = rows[0] || {};
-  return { count: m.count || 0, lastImport: m.last_import || null, token: m.token || '' };
+  return {
+    count: m.count || 0, lastImport: m.last_import || null, token: m.token || '',
+    sourceUrl: m.source_url || '', lastAuto: m.last_auto || null,
+    erpConfigured: !!process.env.ERP_MCP_URL, erpQuery: ERP_ITEM_QUERY,
+  };
 }
 
 // Preview helper: look up one description (for the on-screen label preview).
@@ -2407,6 +2556,8 @@ app.post('/', async (req, res) => {
         case 'getPrintLog':      out = await getPrintLog(who); break;
         case 'setPrintDailyLimit': out = await setPrintDailyLimit(who, body.limit); break;
         case 'getPartImportInfo':  out = await getPartImportInfo(who); break;
+        case 'setPartSourceUrl':   out = await setPartSourceUrl(who, body.url); break;
+        case 'refreshPartsNow':    out = await refreshPartsNow(who); break;
         case 'lookupPart':         out = await lookupPart(who, body.code); break;
         // ----- Push notifications -----
         case 'savePushSubscription':   out = await savePushSubscription(who, body); break;
@@ -2427,6 +2578,31 @@ app.post('/', async (req, res) => {
 // Ensure the schema is up to date (adds rules.team_wide on first boot after
 // this deploy), then start serving. We start even if the migration hiccups so
 // the app never goes fully dark over a schema check.
+// Weekly worker: every Saturday at 2:37 AM (US Pacific) reload the part
+// descriptions from the published CSV URL. Checks once a minute; a DB date guard
+// (part_meta.last_auto) makes it run at most once per Saturday even across
+// restarts. Does nothing if no source URL is configured.
+function startWeeklyRefresh() {
+  setInterval(async () => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT to_char(now() AT TIME ZONE 'America/Los_Angeles', 'ID') AS dow,
+                to_char(now() AT TIME ZONE 'America/Los_Angeles', 'HH24:MI') AS hm,
+                (now() AT TIME ZONE 'America/Los_Angeles')::date::text AS today`);
+      const { dow, hm, today } = rows[0];                 // ID: 1=Mon … 6=Sat, 7=Sun
+      if (dow !== '6' || hm < '02:37' || hm > '02:45') return;
+      const { rows: g } = await pool.query('SELECT last_auto::text AS d FROM part_meta WHERE id = 1');
+      if (g.length && g[0].d === today) return;           // already ran this Saturday
+      await pool.query('UPDATE part_meta SET last_auto = $1 WHERE id = 1', [today]);
+      console.log('Weekly parts refresh: starting (Sat 02:37 PT)…');
+      const res = await runWeeklyRefresh();
+      console.log('Weekly parts refresh:', JSON.stringify(res));
+    } catch (e) {
+      console.error('weekly refresh tick error:', e && e.message ? e.message : e);
+    }
+  }, 60 * 1000);
+}
+
 (async () => {
   try {
     await ensureSchema();
@@ -2434,4 +2610,5 @@ app.post('/', async (req, res) => {
     console.error('ensureSchema failed (continuing to serve anyway):', e);
   }
   app.listen(PORT, () => console.log('Action Spa Warehouse API listening on port', PORT));
+  startWeeklyRefresh();
 })();
