@@ -1102,8 +1102,10 @@
       <div id="lpPrintView">
       <div class="lp-hint">Scan a part barcode (or type the number), set the quantity, then tap Print. Labels print on the Zebra ZQ620.</div>
       <label class="lp-field">
-        <span class="lp-lab">Part barcode</span>
-        <input id="lpCode" type="text" inputmode="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Scan here… or type e.g. 6000-362">
+        <span class="lp-lab">Part barcode
+          <button type="button" id="lpKbToggle" style="margin-left:8px; font-size:11px; padding:2px 9px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--accent); font-weight:600; cursor:pointer;">⌨ Type</button>
+        </span>
+        <input id="lpCode" type="text" inputmode="none" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Scan here… or tap ⌨ Type">
       </label>
       <div class="lp-qtyrow">
         <button class="lp-cancel" id="lpCancel">Cancel</button>
@@ -1111,7 +1113,7 @@
           <span class="lp-lab">Quantity</span>
           <div class="lp-stepper">
             <button type="button" id="lpMinus" aria-label="Fewer">−</button>
-            <input id="lpQty" type="number" min="1" max="999" value="1" inputmode="numeric">
+            <input id="lpQty" type="number" min="1" max="999" value="1" inputmode="none">
             <button type="button" id="lpPlus" aria-label="More">＋</button>
           </div>
         </div>
@@ -2395,8 +2397,27 @@ async function refreshCurrent() {
    show whether that bridge/PC is currently online. */
 const lp = { last: null, batch: [], actJobs: [], actSearch: "", actName: "", actDate: "", desc: "", descTimer: null };
 
+// Scanner-first: the soft keyboard stays hidden so it can't cover the app (the
+// hardware scanner still types into the focused box). The "⌨ Type" button flips
+// it on for manual entry; entering the screen resets to scanner mode.
+let lpTypeMode = false;
+function lpSetTypeMode(on) {
+  lpTypeMode = !!on;
+  const code = $("lpCode"), qty = $("lpQty"), btn = $("lpKbToggle");
+  code.inputMode = on ? "text" : "none";
+  qty.inputMode = on ? "numeric" : "none";
+  if (btn) {
+    btn.textContent = on ? "⌨ Typing: ON" : "⌨ Type";
+    btn.style.background = on ? "var(--accent)" : "var(--surface)";
+    btn.style.color = on ? "#fff" : "var(--accent)";
+  }
+  if (on) { try { code.focus(); } catch (_) {} }
+  else { try { code.blur(); qty.blur(); } catch (_) {} }
+}
+
 function initLabelPrinter() {
   lpSetStatus("");
+  lpSetTypeMode(false);   // start in scanner mode (no keyboard popup)
   $("lpCode").value = "";
   $("lpQty").value = "1";
   $("lpZpl").hidden = true;
@@ -4520,6 +4541,7 @@ document.querySelectorAll(".eom-tab").forEach(b => b.addEventListener("click", (
 
 // Label Printer controls.
 $("tileLabel").addEventListener("click", () => showScreen("label"));
+$("lpKbToggle").addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); lpSetTypeMode(!lpTypeMode); });
 $("lpCode").addEventListener("input", lpRenderPreview);
 $("lpCode").addEventListener("keydown", (e) => {
   // A scan ends with Enter -> show the label preview and move to the quantity,
