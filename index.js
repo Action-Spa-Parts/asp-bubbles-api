@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '50';
+const APP_VERSION = '51';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1636,40 +1636,34 @@ function importantDesc(s) {
   return cut.replace(/[\s,]+$/, '');
 }
 
-// Estimate a Code 128 barcode's width in modules so we can center it. All-digit
-// codes use subset C (2 digits per symbol → much narrower), everything else
-// subset B (1 char per symbol). Formula: (dataSymbols + start + checksum) * 11
-// + 13 (stop). Used to compute the centered x-origin.
-function est128Modules(code) {
-  const c = String(code || '');
-  const len = Math.max(c.length, 1);
-  const allDigits = /^\d+$/.test(c) && len >= 2;
-  const dataSymbols = allDigits ? (Math.floor(len / 2) + (len % 2)) : len;
-  return (dataSymbols + 2) * 11 + 13;
-}
+// Exact Code 128 width in modules when the data is forced to subset B (the `>:`
+// prefix below): start + one symbol per char + checksum, all 11 modules, + 13
+// for the stop bar. Forcing one subset makes the width 100% predictable so the
+// barcode can be centered exactly (auto subset-switching would vary the width
+// and throw off centering — that was the bug).
+function bc128ModulesB(len) { return (Math.max(len, 1) + 2) * 11 + 13; }
 
 function buildLabelZpl(code, qty, desc) {
-  const clean = (s, n) => String(s == null ? '' : s).replace(/[\r\n\t]/g, '').replace(/[\^~\\]/g, '').trim().slice(0, n);
+  const clean = (s, n) => String(s == null ? '' : s).replace(/[\r\n\t]/g, '').replace(/[\^~\\>]/g, '').trim().slice(0, n);
   const c = clean(code, 40);
   const d = importantDesc(desc);
   const q = Math.max(1, Math.min(999, parseInt(qty, 10) || 1));
   const len = Math.max(c.length, 1);
   // Number condenses its character WIDTH for long codes so it always fits.
   const numW = Math.max(18, Math.min(48, Math.floor(390 / len)));
-  // Barcode: FIXED module width (uniform bar thickness + height on every label),
-  // dropping to 1 only for very long codes that wouldn't otherwise fit. Centered
-  // by computing the x-origin (the ^FB,C trick does NOT center a ^BC barcode),
-  // and shifted toward the bottom.
-  const estModules = est128Modules(c);               // ~Code128 width in modules
-  const modW = (estModules * 2 <= 396) ? 2 : 1;
-  const bcW = estModules * modW;
-  const bcX = Math.max(4, Math.round((406 - bcW) / 2));
+  // Barcode: forced subset B (`^FD>:`) → exact, predictable width. Fixed module
+  // width (uniform bar thickness + height), dropping to 1 only for very long
+  // codes. Centered by exact x-origin, shifted toward the bottom.
+  const bcModules = bc128ModulesB(len);
+  const modW = (bcModules * 2 <= 396) ? 2 : 1;
+  const bcW = bcModules * modW;
+  const bcX = Math.max(2, Math.round((406 - bcW) / 2));
   return [
     '^XA', '^CI28', '^PW406', '^LL0203',
     '^FO8,18^A0N,22,22^FB390,1,0,C,0^FD' + d + '^FS',
     '^FO0,48^A0N,48,' + numW + '^FB406,1,0,C,0^FD' + c + '^FS',
     '^BY' + modW + ',2.5',
-    '^FO' + bcX + ',118^BCN,64,N,N,N^FD' + c + '^FS',
+    '^FO' + bcX + ',118^BCN,64,N,N,N^FD>:' + c + '^FS',
     '^PQ' + q + ',0,0,N', '^XZ'
   ].join('\n');
 }

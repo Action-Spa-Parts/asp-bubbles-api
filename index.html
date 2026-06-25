@@ -2468,10 +2468,11 @@ function lpImportantDesc(s) {
 // Build ZPL for a 2" x 1" label @ 203 dpi (406 x 203 dots). Mirrors the server's
 // buildLabelZpl: short description line, big condensable number, then a uniform
 // (fixed module width) centered Code 128 shifted toward the bottom.
-function lpEstModules(code) { const c = String(code || ""); const len = Math.max(c.length, 1); const allDigits = /^\d+$/.test(c) && len >= 2; const ds = allDigits ? (Math.floor(len / 2) + (len % 2)) : len; return (ds + 2) * 11 + 13; }
+// Exact Code 128 width when forced to subset B (the ^FD>: prefix) — deterministic, so centering is exact.
+function lpEstModules(code) { const len = Math.max(String(code || "").length, 1); return (len + 2) * 11 + 13; }
 function lpNumW(code) { const len = Math.max(String(code || "").length, 1); return Math.max(18, Math.min(48, Math.floor(390 / len))); }
 function lpModW(code) { return (lpEstModules(code) * 2 <= 396) ? 2 : 1; }
-function lpBcX(code) { return Math.max(4, Math.round((406 - lpEstModules(code) * lpModW(code)) / 2)); }
+function lpBcX(code) { return Math.max(2, Math.round((406 - lpEstModules(code) * lpModW(code)) / 2)); }
 
 function lpBuildZpl(code, qty) {
   return [
@@ -2482,7 +2483,7 @@ function lpBuildZpl(code, qty) {
     "^FO8,18^A0N,22,22^FB390,1,0,C,0^FD" + lpImportantDesc(lp.desc || "") + "^FS",
     "^FO0,48^A0N,48," + lpNumW(code) + "^FB406,1,0,C,0^FD" + code + "^FS",
     "^BY" + lpModW(code) + ",2.5",
-    "^FO" + lpBcX(code) + ",118^BCN,64,N,N,N^FD" + code + "^FS",
+    "^FO" + lpBcX(code) + ",118^BCN,64,N,N,N^FD>:" + code + "^FS",
     "^PQ" + qty + ",0,0,N",
     "^XZ"
   ].join("\n");
