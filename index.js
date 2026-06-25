@@ -16,6 +16,7 @@ import pg from 'pg';
 import path from 'path';
 import crypto from 'node:crypto';
 import nodemailer from 'nodemailer';
+import webpush from 'web-push';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '38';
+const APP_VERSION = '39';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -268,6 +269,32 @@ async function ensureSchema() {
       updated_at TIMESTAMPTZ
     )`);
   await pool.query(`INSERT INTO cloud_print (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+
+  // ----- Push notifications (Web Push / VAPID) -----
+  // The server's VAPID keypair is generated here on first boot and stored in the
+  // DB (NOT hard-coded — the repo is public, and we want zero Railway env setup
+  // for the handoff). Same pattern as the print-bridge token above.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS push_keys (
+      id          INTEGER PRIMARY KEY,
+      public_key  TEXT,
+      private_key TEXT,
+      subject     TEXT
+    )`);
+  // Each device that opts in stores its push subscription here, tied to the
+  // logged-in person so we can target reminders (e.g. the checklist assignee).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id         SERIAL PRIMARY KEY,
+      endpoint   TEXT NOT NULL UNIQUE,
+      p256dh     TEXT NOT NULL,
+      auth       TEXT NOT NULL,
+      subscriber TEXT,
+      role       TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen  TIMESTAMPTZ
+    )`);
+  await ensureVapid();
 }
 
 // =================================================================
@@ -1925,6 +1952,99 @@ async function getEomLog(who) {
   return { periods, isManager: isMgr };
 }
 
+// =================================================================
+// Push notifications (Web Push)
+// =================================================================
+let VAPID_PUBLIC = '';
+let vapidReady = false;
+
+// Load (or generate + store) the server's VAPID keypair and configure web-push.
+async function ensureVapid() {
+  const { rows } = await pool.query('SELECT public_key, private_key, subject FROM push_keys WHERE id = 1');
+  let row = rows[0];
+  if (!row || !row.public_key || !row.private_key) {
+    const keys = webpush.generateVAPIDKeys();
+    const subject = MANAGER_EMAIL ? ('mailto:' + MANAGER_EMAIL) : 'mailto:notifications@actionspaparts.com';
+    await pool.query(
+      `INSERT INTO push_keys (id, public_key, private_key, subject) VALUES (1, $1, $2, $3)
+       ON CONFLICT (id) DO UPDATE SET public_key = $1, private_key = $2, subject = $3`,
+      [keys.publicKey, keys.privateKey, subject]);
+    row = { public_key: keys.publicKey, private_key: keys.privateKey, subject };
+    console.log('Schema: generated VAPID push keypair.');
+  }
+  webpush.setVapidDetails(row.subject, row.public_key, row.private_key);
+  VAPID_PUBLIC = row.public_key;
+  vapidReady = true;
+}
+
+// Public: the browser needs the VAPID public key to create a subscription.
+async function getVapidPublicKey() {
+  return { key: VAPID_PUBLIC || null };
+}
+
+// A device opts in: store its push subscription, tied to the logged-in person.
+async function savePushSubscription(who, body) {
+  if (!who) return { error: 'Not authorized' };
+  const sub = body && body.sub;
+  if (!sub || !sub.endpoint || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) {
+    return { error: 'Bad subscription' };
+  }
+  await pool.query(
+    `INSERT INTO push_subscriptions (endpoint, p256dh, auth, subscriber, role, last_seen)
+     VALUES ($1, $2, $3, $4, $5, now())
+     ON CONFLICT (endpoint) DO UPDATE SET p256dh = $2, auth = $3, subscriber = $4, role = $5, last_seen = now()`,
+    [sub.endpoint, sub.keys.p256dh, sub.keys.auth, who.name || null, who.role || null]);
+  return { ok: true };
+}
+
+async function removePushSubscription(who, body) {
+  const endpoint = body && body.endpoint;
+  if (endpoint) await pool.query('DELETE FROM push_subscriptions WHERE endpoint = $1', [endpoint]);
+  return { ok: true };
+}
+
+// How many devices are subscribed (for the manager UI) + whether push is ready.
+async function getPushStatus(who) {
+  if (!who) return { error: 'Not authorized' };
+  const { rows } = await pool.query('SELECT COUNT(*)::int AS n FROM push_subscriptions');
+  return { configured: vapidReady, devices: rows[0].n };
+}
+
+// Send a payload to a set of subscription rows; prune dead ones (404/410 = gone).
+async function pushToSubs(rows, payload) {
+  if (!vapidReady) return { sent: 0, failed: 0 };
+  const data = JSON.stringify(payload);
+  let sent = 0, failed = 0;
+  for (const r of rows) {
+    const sub = { endpoint: r.endpoint, keys: { p256dh: r.p256dh, auth: r.auth } };
+    try {
+      await webpush.sendNotification(sub, data);
+      sent++;
+    } catch (e) {
+      failed++;
+      if (e && (e.statusCode === 404 || e.statusCode === 410)) {
+        await pool.query('DELETE FROM push_subscriptions WHERE endpoint = $1', [r.endpoint]).catch(() => {});
+      }
+    }
+  }
+  return { sent, failed };
+}
+
+// Manager fires a test notification to every subscribed device.
+async function sendTestPush(who) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  if (!vapidReady) return { error: 'Push notifications are not set up on the server yet.' };
+  const { rows } = await pool.query('SELECT endpoint, p256dh, auth FROM push_subscriptions');
+  if (!rows.length) return { error: 'No devices have enabled notifications yet. Tap “Enable notifications” on a scanner first.' };
+  const res = await pushToSubs(rows, {
+    title: 'Action Spa Warehouse',
+    body: 'Test notification — if you can see this on the scanner, push works! 🎉',
+    tag: 'asp-test',
+    url: '/',
+  });
+  return { ok: true, ...res };
+}
+
 app.post('/', async (req, res) => {
   let body;
   try {
@@ -1940,6 +2060,7 @@ app.post('/', async (req, res) => {
       case 'login':       out = await login(body.pin); break;
       case 'getPublic':   out = await getPublic(); break;
       case 'getVersion':  out = { version: APP_VERSION }; break;
+      case 'getVapidPublicKey': out = await getVapidPublicKey(); break;
       case 'adminLogin':  out = await adminLogin(body); break;
       case 'adminSignup': out = await adminSignup(body); break;
       case 'adminLogout': out = await adminLogout(body); break;
@@ -2008,6 +2129,11 @@ app.post('/', async (req, res) => {
         case 'setCloudSettings': out = await setCloudSettings(who, body); break;
         case 'getPrintUsage':    out = await getPrintUsage(who); break;
         case 'getPrintLog':      out = await getPrintLog(who); break;
+        // ----- Push notifications -----
+        case 'savePushSubscription':   out = await savePushSubscription(who, body); break;
+        case 'removePushSubscription': out = await removePushSubscription(who, body); break;
+        case 'getPushStatus':          out = await getPushStatus(who); break;
+        case 'sendTestPush':           out = await sendTestPush(who); break;
         default:                  out = { error: 'Unknown action: ' + action };
       }
     }

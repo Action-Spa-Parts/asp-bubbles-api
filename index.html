@@ -559,6 +559,13 @@
   .app-tile .tile-desc { font-size:13px; color:var(--muted); margin-top:1px; display:block; }
   .app-tile .tile-arrow { color:var(--muted); font-size:22px; flex-shrink:0; line-height:1; }
   .app-tile.tv { box-shadow:none; border-style:dashed; }
+  .home-notify { max-width:520px; margin:18px auto 0; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); padding:14px 16px; display:flex; flex-direction:column; gap:12px; }
+  .home-notify .notify-main { display:flex; gap:12px; align-items:flex-start; }
+  .home-notify .notify-ico { font-size:24px; line-height:1.1; }
+  .home-notify .notify-title { font-weight:700; font-size:15px; }
+  .home-notify .notify-sub { font-size:13px; color:var(--muted); margin-top:2px; }
+  .home-notify .notify-btns { display:flex; gap:10px; flex-wrap:wrap; }
+  .home-notify .notify-btns button { flex:1; min-width:130px; }
   .turn-badge {
     font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
     padding:2px 8px; border-radius:99px; background:var(--danger-soft); color:var(--danger);
@@ -937,6 +944,22 @@
         </span>
         <span class="tile-arrow">↗</span>
       </a>
+    </div>
+
+    <!-- Per-device push opt-in -->
+    <div class="home-notify" id="notifyCard" hidden>
+      <div class="notify-main">
+        <span class="notify-ico">🔔</span>
+        <div>
+          <div class="notify-title">Reminders on this device</div>
+          <div class="notify-sub" id="notifySub">Get closing-checklist and shift reminders as pop-up notifications on this device.</div>
+        </div>
+      </div>
+      <div class="notify-btns">
+        <button class="primary" id="notifyEnable">Enable notifications</button>
+        <button class="ghost" id="notifyDisable" hidden>Turn off</button>
+        <button class="ghost" id="notifyTest" hidden>Send test</button>
+      </div>
     </div>
   </div>
 
@@ -2107,6 +2130,81 @@ function showScreen(name) {
   if (name === "boxcounter") loadBoxSizes();
   if (name === "eom") { switchEomTab("vote"); loadEom(); }
   if (name === "label") initLabelPrinter();
+  if (name === "home") updateNotifyUI();
+}
+
+/* ---------- Push notifications (per-device opt-in) ----------
+   Each scanner taps "Enable" once. The service worker shows the pop-up even when
+   the app is closed; the server sends pushes at scheduled times. */
+const PUSH = {
+  supported: ("serviceWorker" in navigator) && ("PushManager" in window) && ("Notification" in window),
+  publicKey: null,
+};
+
+function urlB64ToUint8Array(b64) {
+  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+  const s = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(s);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
+async function currentPushSub() {
+  if (!PUSH.supported) return null;
+  try { const reg = await navigator.serviceWorker.ready; return await reg.pushManager.getSubscription(); }
+  catch (_) { return null; }
+}
+
+async function updateNotifyUI() {
+  const card = $("notifyCard"); if (!card) return;
+  card.hidden = false;
+  const enableBtn = $("notifyEnable"), offBtn = $("notifyDisable"), testBtn = $("notifyTest"), sub = $("notifySub");
+  const isMgr = !!(session && session.role === "manager");
+  if (!PUSH.supported) {
+    sub.textContent = "This device's browser can't show notifications.";
+    enableBtn.hidden = true; offBtn.hidden = true;
+    testBtn.hidden = !isMgr;   // a manager can still test other devices
+    return;
+  }
+  const on = !!(await currentPushSub()) && Notification.permission === "granted";
+  enableBtn.hidden = on;
+  offBtn.hidden = !on;
+  testBtn.hidden = !isMgr;
+  sub.textContent = on
+    ? "✓ On for this device. You'll get closing-checklist and shift reminders here."
+    : "Get closing-checklist and shift reminders as pop-up notifications on this device.";
+}
+
+async function enablePush() {
+  if (!PUSH.supported) { alert("This device or browser can't show notifications."); return; }
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { alert("Notifications are blocked for this site. Allow them in the browser's site settings, then try again."); return; }
+    const reg = await navigator.serviceWorker.ready;
+    if (!PUSH.publicKey) { const r = await apiCall("getVapidPublicKey", {}); PUSH.publicKey = r && r.key; }
+    if (!PUSH.publicKey) { alert("The server isn't set up for notifications yet."); return; }
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array(PUSH.publicKey) });
+    const res = await apiCall("savePushSubscription", { pin: session.pin, sub: sub.toJSON() });
+    if (res && res.error) { alert(res.error); return; }
+    await updateNotifyUI();
+    alert("Notifications enabled on this device ✓");
+  } catch (e) { alert("Couldn't enable notifications: " + (e && e.message ? e.message : e)); }
+}
+
+async function disablePush() {
+  try {
+    const sub = await currentPushSub();
+    if (sub) { await apiCall("removePushSubscription", { pin: session.pin, endpoint: sub.endpoint }); await sub.unsubscribe(); }
+  } catch (_) {}
+  await updateNotifyUI();
+}
+
+async function sendTestPushNow() {
+  const res = await apiCall("sendTestPush", { pin: session.pin });
+  if (res && res.error) { alert(res.error); return; }
+  alert("Sent to " + (res.sent || 0) + " device(s)" + (res.failed ? (", " + res.failed + " failed") : "") + ". Check the scanner's notification shade.");
 }
 
 // The toolbar Refresh button reloads whatever screen you're actually looking at.
@@ -4172,6 +4270,9 @@ setInterval(checkVersion, 5 * 60 * 1000);                        // every 5 min 
 document.addEventListener("visibilitychange", () => { if (!document.hidden) checkVersion(); });  // when reopened/refocused
 
 $("refreshBtn").addEventListener("click", refreshCurrent);
+$("notifyEnable").addEventListener("click", enablePush);
+$("notifyDisable").addEventListener("click", disablePush);
+$("notifyTest").addEventListener("click", sendTestPushNow);
 
 $("aClose").addEventListener("click", () => { $("award").hidden = true; });
 
