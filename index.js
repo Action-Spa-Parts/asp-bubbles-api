@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '45';
+const APP_VERSION = '46';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1903,9 +1903,13 @@ async function erpFetchItems(query, columns) {
       for (const rec of recs) {
         const code = String(rec.item || '').trim();
         if (!code) continue;
+        // `freeform` is the full description with correct spacing; the `descr`
+        // 5-line array drops spaces at the 30-char wrap, so only use it as a
+        // fallback when freeform is empty.
         const arr = Array.isArray(rec.descr) ? rec.descr : [rec.descr];
-        const description = arr.map(x => x == null ? '' : String(x)).join('').trim();
-        items.push({ code, description });
+        const joined = arr.map(x => x == null ? '' : String(x)).join('').trim();
+        const ff = (rec.freeform == null ? '' : String(rec.freeform)).trim();
+        items.push({ code, description: ff || joined });
       }
       if (recs.length < PAGE) break;
     }
@@ -1919,7 +1923,7 @@ async function erpFetchItems(query, columns) {
 async function refreshPartsFromErp() {
   if (!process.env.ERP_MCP_URL) return { skipped: true, reason: 'ERP_MCP_URL not set' };
   let items;
-  try { items = await erpFetchItems(ERP_ITEM_QUERY, 'item,descr'); }
+  try { items = await erpFetchItems(ERP_ITEM_QUERY, 'item,descr,freeform'); }
   catch (e) { return { ok: false, error: (e && e.message) ? e.message : 'ERP query failed' }; }
   if (!items.length) return { ok: false, error: 'ERP returned no items' };
   return await replacePartDescriptions(items);
