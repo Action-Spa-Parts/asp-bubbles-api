@@ -597,6 +597,9 @@
   .lp-printerbar { display:flex; align-items:center; gap:10px; margin-bottom:12px; padding:8px 10px; background:var(--accent-soft); border-radius:10px; }
   .lp-printerbar[hidden] { display:none; }
   .lp-printerbar select { flex:1; min-width:0; font:inherit; font-weight:700; color:var(--text); background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:9px 11px; }
+  .lp-prtoggle { display:flex; gap:6px; flex:1; flex-wrap:wrap; }
+  .lp-prbtn { flex:1; min-width:120px; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface); font:inherit; font-weight:700; color:var(--text); cursor:pointer; }
+  .lp-prbtn.active { background:var(--accent); color:#fff; border-color:var(--accent); }
   .lp-stepper input::-webkit-outer-spin-button, .lp-stepper input::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
   .lp-previewwrap { display:flex; flex-direction:column; align-items:center; gap:6px; }
   .lp-label { width:300px; height:150px; background:#fff; border:1px solid #d4d4d4; border-radius:6px; box-shadow:var(--shadow-card); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:10px; }
@@ -1106,7 +1109,7 @@
       <div class="lp-hint">Scan a part barcode (or type the number), set the quantity, then tap Print. Labels print on the Zebra ZQ620.</div>
       <div class="lp-printerbar" id="lpPrinterBar" hidden>
         <span class="lp-lab">Printer</span>
-        <select id="lpPrinterSel"></select>
+        <div class="lp-prtoggle" id="lpPrinterToggle"></div>
       </div>
       <label class="lp-field">
         <span class="lp-lab">Part barcode</span>
@@ -2826,21 +2829,25 @@ async function lpLoadUsage() {
 
 // ----- Per-device printer choice (remembered on this device) -----
 function lpSelectedPrinterId() {
-  const sel = $("lpPrinterSel");
-  if (sel && sel.value) return parseInt(sel.value, 10);
   const saved = localStorage.getItem("lpPrinterId");
   return saved ? parseInt(saved, 10) : null;
 }
 async function lpLoadPrinters() {
-  const bar = $("lpPrinterBar"), sel = $("lpPrinterSel");
-  if (!bar || !sel) return;
+  const bar = $("lpPrinterBar"), wrap = $("lpPrinterToggle");
+  if (!bar || !wrap) return;
   let printers = [];
   try { const r = await apiCall("getPrinters", { pin: session.pin }); printers = (r && r.printers) || []; } catch (_) {}
-  if (!printers.length) { bar.hidden = true; sel.innerHTML = ""; return; }
-  const saved = localStorage.getItem("lpPrinterId");
-  const chosen = printers.some(p => String(p.id) === String(saved)) ? saved : String(printers[0].id);
-  sel.innerHTML = printers.map(p => `<option value="${p.id}"${String(p.id) === String(chosen) ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
+  if (!printers.length) { bar.hidden = true; wrap.innerHTML = ""; return; }
+  let chosen = localStorage.getItem("lpPrinterId");
+  if (!printers.some(p => String(p.id) === String(chosen))) chosen = String(printers[0].id);
   localStorage.setItem("lpPrinterId", chosen);
+  wrap.innerHTML = printers.map(p =>
+    `<button type="button" class="lp-prbtn${String(p.id) === String(chosen) ? " active" : ""}" data-pid="${p.id}">${escapeHtml(p.name)}</button>`).join("");
+  wrap.querySelectorAll("[data-pid]").forEach(b => b.addEventListener("click", () => {
+    localStorage.setItem("lpPrinterId", b.dataset.pid);
+    wrap.querySelectorAll(".lp-prbtn").forEach(x => x.classList.toggle("active", x === b));
+    lpSetStatus("Printing to " + b.textContent, "ok");
+  }));
   bar.hidden = printers.length < 2;   // only show the toggle when there's a real choice
 }
 
@@ -4544,7 +4551,6 @@ $("mNotifyTest").addEventListener("click", async () => { await sendTestPushNow()
 $("mNotifyEnableDevice").addEventListener("click", async () => { await enablePush(); renderNotifyAdmin(); });
 $("lblLimitSave").addEventListener("click", saveLabelLimit);
 $("lblPrAdd").addEventListener("click", lpAddPrinter);
-$("lpPrinterSel").addEventListener("change", () => { if ($("lpPrinterSel").value) localStorage.setItem("lpPrinterId", $("lpPrinterSel").value); });
 $("lblCsvBtn").addEventListener("click", () => $("lblCsvFile").click());
 $("lblCsvFile").addEventListener("change", (e) => { const f = e.target.files && e.target.files[0]; uploadPartCsv(f); e.target.value = ""; });
 $("lblSrcSave").addEventListener("click", saveLabelSrcUrl);
