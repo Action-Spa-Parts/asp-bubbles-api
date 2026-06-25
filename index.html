@@ -4520,37 +4520,15 @@ document.querySelectorAll(".eom-tab").forEach(b => b.addEventListener("click", (
 
 // Label Printer controls.
 $("tileLabel").addEventListener("click", () => showScreen("label"));
-// ---- Scanner-first: keep the on-screen keyboard from auto-popping app-wide ----
-// Every field starts with the soft keyboard suppressed, so auto-focus (scans,
-// screen changes) never makes it cover the app. It appears only when the user
-// actually TAPS a field. Hardware keys type into the focused field regardless.
-(function suppressAutoKeyboard() {
-  function isField(el) { return el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA"); }
-  // The keyboard a field should show WHEN TAPPED (computed before we suppress, so
-  // we don't lose its original inputmode hint).
-  function naturalMode(el) {
-    if (el.type === "number") return "numeric";
-    if (el.type === "email") return "email";
-    if (el.type === "tel") return "tel";
-    const im = el.getAttribute("inputmode");
-    return (im && im !== "none") ? im : "text";
-  }
-  function desiredMode(el) { return el.dataset.im || naturalMode(el); }
-  function suppress(el) { if (!el.dataset.im) el.dataset.im = naturalMode(el); el.inputMode = "none"; }
-  let tapEl = null, tapAt = 0;
-  // A real tap arms that field's keyboard.
-  document.addEventListener("pointerdown", (e) => {
-    const el = e.target.closest ? e.target.closest("input, textarea") : null;
-    tapEl = el; tapAt = Date.now();
-    if (el) el.inputMode = desiredMode(el);
-  }, true);
-  // Focus that didn't come from a tap (auto-focus / programmatic) → no keyboard.
-  document.addEventListener("focusin", (e) => {
-    const el = e.target;
-    if (!isField(el)) return;
-    const tapped = el === tapEl && (Date.now() - tapAt < 800);
-    if (!tapped) suppress(el);
-  }, true);
+// ---- No on-screen keyboard, anywhere ----
+// The handhelds (and the office PC) have physical keys, and the soft keyboard
+// kept covering the app. So force inputmode="none" on every field, always — the
+// soft keyboard never shows; hardware keys still type into the focused field.
+(function killSoftKeyboard() {
+  function suppress(el) { if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) el.inputMode = "none"; }
+  // Before focus (tap) and on focus — belt and suspenders so it can't slip through.
+  document.addEventListener("pointerdown", (e) => { const el = e.target.closest ? e.target.closest("input, textarea") : null; suppress(el); }, true);
+  document.addEventListener("focusin", (e) => suppress(e.target), true);
   document.querySelectorAll("input, textarea").forEach(suppress);
 })();
 
