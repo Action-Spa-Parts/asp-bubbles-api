@@ -585,6 +585,12 @@
 
   /* Label Printer */
   #labelScreen { padding-bottom:90px; }
+  .lp-home-tiles { display:flex; flex-direction:column; gap:14px; max-width:520px; margin:6px auto 0; }
+  .lp-bigtile { padding:22px 20px; }
+  .lp-bigtile .tile-icon { width:58px; height:58px; font-size:30px; border-radius:15px; }
+  .lp-bigtile .tile-name { font-size:20px; }
+  .lp-bigtile .tile-desc { font-size:14px; margin-top:3px; }
+  .lp-back { margin-bottom:10px; }
   .lp-wrap { max-width:520px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
   .lp-hint { color:var(--muted); font-size:14px; }
   .lp-field { display:flex; flex-direction:column; gap:6px; }
@@ -1131,7 +1137,29 @@
   <!-- ===== Label Printer app ===== -->
   <div id="labelScreen" hidden>
     <div class="lp-wrap">
-      <div id="lpPrintView">
+      <div id="lpHomeView">
+        <div class="lp-home-tiles">
+          <button class="app-tile lp-bigtile" id="lpTileReceiving">
+            <span class="tile-icon">📥</span>
+            <span class="tile-body">
+              <span class="tile-name">Receiving</span>
+              <span class="tile-desc">Scan a part &amp; print its barcode label</span>
+            </span>
+            <span class="tile-arrow">›</span>
+          </button>
+          <button class="app-tile lp-bigtile" id="lpTilePicking">
+            <span class="tile-icon">📦</span>
+            <span class="tile-body">
+              <span class="tile-name">Picking</span>
+              <span class="tile-desc">Scan an order &amp; print a label for every line item</span>
+            </span>
+            <span class="tile-arrow">›</span>
+          </button>
+        </div>
+        <button class="ghost" id="lpTileActivity" hidden style="display:block; width:100%; max-width:520px; margin:14px auto 0;">🧾 Print activity</button>
+      </div>
+      <div id="lpPrintView" hidden>
+        <button class="ghost lp-back" data-lpback>← Back</button>
       <div class="lp-hint">Scan a part barcode (or type the number), set the quantity, then tap Print. Labels print on the Zebra ZQ620.</div>
       <div class="lp-printerbar" id="lpPrinterBar" hidden>
         <span class="lp-lab">Printer</span>
@@ -1200,7 +1228,8 @@
       </details>
       </div><!-- /lpPrintView -->
       <div id="lpOrderView" hidden>
-        <div class="lp-hint">Scan or type an order number to print a label for every line item on it. Labels print on the Zebra set on the Print tab.</div>
+        <button class="ghost lp-back" data-lpback>← Back</button>
+        <div class="lp-hint">Scan or type an order number to print a label for every line item on it.</div>
         <label class="lp-field">
           <span class="lp-lab">Order number</span>
           <input id="lpOrderNo" type="text" inputmode="none" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Scan order… or tap to type">
@@ -1216,6 +1245,7 @@
         <div class="lp-status" id="lpOrderStatus" hidden></div>
       </div><!-- /lpOrderView -->
       <div id="lpActivityView" hidden>
+        <button class="ghost lp-back" data-lpback>← Back</button>
         <h2 class="section" style="font-size:16px; margin-top:0;">Print activity</h2>
         <div class="filterbar lp-actbar">
           <input id="lpActSearch" type="text" autocomplete="off" placeholder="Search part #">
@@ -2528,8 +2558,8 @@ function initLabelPrinter() {
   lpRenderBatch();
   lpRenderPreview();
   $("lpReprint").hidden = !lp.last;
-  setTimeout(() => { try { $("lpCode").focus(); } catch (_) {} }, 60);
-  switchLpTab("print");
+  $("lpTileActivity").hidden = !(session && session.role === "manager");
+  lpShowMode("home");
   lpDetectPrinter();
   lpLoadPrinters();
   lpLoadCloudSettings();
@@ -2639,10 +2669,9 @@ function lpShowPrinterStatus(s) {
     if (s.bridgeToken) { $("lpToken").textContent = s.bridgeToken; row.hidden = false; }
     else { row.hidden = true; }
   }
-  // The bottom nav + Activity tab are manager-only (bridgeToken is only returned to managers).
+  // The Activity view is manager-only (bridgeToken is only returned to managers).
   const mgr = !!s.bridgeToken;
-  const nav = $("lpNav"); if (nav) nav.hidden = !mgr;
-  const na = $("lpNavActivity"); if (na) na.hidden = !mgr;
+  const act = $("lpTileActivity"); if (act) act.hidden = !mgr;
 }
 
 function lpSetStatus(msg, kind) {
@@ -2785,13 +2814,19 @@ async function lpTestPrint() {
   lpSetStatus(r.ok ? "Test label queued ✓" : (r.error || "Test failed"), r.ok ? "ok" : "err");
 }
 
-function switchLpTab(name) {
-  document.querySelectorAll("#lpNav .navbtn").forEach(b => b.classList.toggle("active", b.dataset.lptab === name));
-  $("lpPrintView").hidden = name !== "print";
-  $("lpOrderView").hidden = name !== "order";
-  $("lpActivityView").hidden = name !== "activity";
-  if (name === "activity") lpLoadActivity();
-  if (name === "order") { try { $("lpOrderNo").focus(); } catch (_) {} }
+// The Label Printer opens on a landing with two big tiles — Receiving (scan a
+// part → print its label) and Picking (scan an order → a label per line) — each
+// opening its own screen with a Back button. Activity is manager-only.
+function lpShowMode(mode) {
+  lp.mode = mode;
+  $("lpHomeView").hidden = mode !== "home";
+  $("lpPrintView").hidden = mode !== "receiving";
+  $("lpOrderView").hidden = mode !== "picking";
+  $("lpActivityView").hidden = mode !== "activity";
+  const nav = $("lpNav"); if (nav) nav.hidden = true;   // retired in favor of the landing
+  if (mode === "receiving") { try { $("lpCode").focus(); } catch (_) {} }
+  if (mode === "picking") { try { $("lpOrderNo").focus(); } catch (_) {} }
+  if (mode === "activity") lpLoadActivity();
 }
 
 // ----- Order labels: scan an order, print a label for each line item -----
@@ -4896,7 +4931,10 @@ $("lpCopyToken").addEventListener("click", () => {
 });
 $("lpcSave").addEventListener("click", lpSaveCloudSettings);
 $("lpUseRefresh").addEventListener("click", lpLoadUsage);
-document.querySelectorAll("#lpNav .navbtn").forEach(b => b.addEventListener("click", () => switchLpTab(b.dataset.lptab)));
+$("lpTileReceiving").addEventListener("click", () => lpShowMode("receiving"));
+$("lpTilePicking").addEventListener("click", () => lpShowMode("picking"));
+$("lpTileActivity").addEventListener("click", () => lpShowMode("activity"));
+document.querySelectorAll("[data-lpback]").forEach(b => b.addEventListener("click", () => lpShowMode("home")));
 $("lpActSearch").addEventListener("input", () => { lp.actSearch = $("lpActSearch").value; lpRenderActivity(); });
 $("lpActName").addEventListener("change", () => { lp.actName = $("lpActName").value; lpRenderActivity(); });
 $("lpActDate").addEventListener("change", () => { lp.actDate = $("lpActDate").value; lpRenderActivity(); });
