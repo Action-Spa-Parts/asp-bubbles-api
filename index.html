@@ -689,6 +689,8 @@
   /* Sits just above the Box Counter bottom nav (≈58px tall) so Save stays reachable while scrolling. */
   .bc-savebar { position:sticky; bottom:calc(58px + env(safe-area-inset-bottom)); background:linear-gradient(180deg, rgba(247,247,245,0), var(--bg) 35%); padding:14px 0 6px; display:flex; gap:10px; align-items:center; }
   .bc-savebar .bc-saveas { flex:1; min-width:0; color:var(--muted); font-size:13px; }
+  .bc-actfilter { display:flex; gap:8px; margin-bottom:10px; }
+  .bc-actfilter select { flex:1; min-width:0; padding:11px 10px; border:1px solid var(--border); border-radius:10px; background:var(--surface); color:inherit; font-family:inherit; font-size:inherit; }
   .bc-actrow { display:flex; align-items:baseline; gap:10px; padding:10px 2px; border-bottom:1px solid var(--border); }
   .bc-actrow .who { font-weight:600; white-space:nowrap; }
   .bc-actrow .what { flex:1; min-width:0; }
@@ -1102,6 +1104,10 @@
       <div id="bcSizesList"></div>
     </div>
     <div id="bcActivityView" hidden>
+      <div class="bc-actfilter">
+        <select id="bcActName" aria-label="Filter by person"><option value="">All people</option></select>
+        <select id="bcActDay" aria-label="Filter by date"><option value="">All dates</option></select>
+      </div>
       <div class="bc-hint">Who entered or changed box info — newest first.</div>
       <div id="bcActivityList"></div>
     </div>
@@ -1640,10 +1646,12 @@ const state = {
   othersFilter: { name: "", date: "" },    // "Everyone else" filter (employee Activity)
   checklistFilter: { name: "", date: "" }, // Checklist review filter
   boxSizes: [],            // Box Counter: sizes + inventory + thresholds
-  boxTab: "count",         // Box Counter active tab: count | sizes
+  boxTab: "count",         // Box Counter active tab: count | sizes | activity
   boxCountLocal: {},       // Box Counter: {id: countedString} during a Friday count
   boxSearch: { l: "", w: "", h: "" }, // Box Counter dimension filter (blank = any)
   boxSort: "default",      // Box Counter sort: default | low | high (by quantity)
+  boxActivity: [],         // Box Counter activity log rows
+  boxActFilter: { name: "", day: "" }, // Activity tab filter (blank = all)
   boxMeta: null,           // Box Counter Friday/count status from the server
   earnFilter: "",          // How-to-earn category filter
   eom: null,               // Employee of the Month voting data
@@ -2996,16 +3004,40 @@ async function loadBoxActivity() {
     const data = await apiCall("getBoxActivity", { pin: session.pin });
     if (data.error) { el.innerHTML = `<div class="empty">${escapeHtml(data.error)}</div>`; return; }
     state.boxActivity = data.boxActivity || [];
+    bcPopulateActFilters();
     renderBoxActivity();
   } catch (err) {
     el.innerHTML = `<div class="empty">Couldn't load (${escapeHtml(err && err.message ? err.message : String(err))}).</div>`;
   }
 }
 
+// Fill the Activity tab's person + date dropdowns from the loaded log, keeping
+// the current selection if it still exists.
+function bcPopulateActFilters() {
+  const rows = state.boxActivity || [];
+  const names = Array.from(new Set(rows.map(r => r.person).filter(Boolean))).sort();
+  const days = Array.from(new Set(rows.map(r => r.day).filter(Boolean)));  // already newest-first
+  const nameSel = $("bcActName"), daySel = $("bcActDay");
+  nameSel.innerHTML = `<option value="">All people</option>`
+    + names.map(n => `<option value="${escapeAttr(n)}">${escapeHtml(n)}</option>`).join("");
+  daySel.innerHTML = `<option value="">All dates</option>`
+    + days.map(d => `<option value="${escapeAttr(d)}">${escapeHtml(fmtRunDate(d))}</option>`).join("");
+  nameSel.value = names.includes(state.boxActFilter.name) ? state.boxActFilter.name : "";
+  daySel.value = days.includes(state.boxActFilter.day) ? state.boxActFilter.day : "";
+  state.boxActFilter.name = nameSel.value;
+  state.boxActFilter.day = daySel.value;
+}
+
 function renderBoxActivity() {
   const el = $("bcActivityList");
-  const rows = state.boxActivity || [];
-  if (!rows.length) { el.innerHTML = `<div class="empty"><div>No activity yet.</div></div>`; return; }
+  const f = state.boxActFilter || { name: "", day: "" };
+  let rows = state.boxActivity || [];
+  if (f.name) rows = rows.filter(r => r.person === f.name);
+  if (f.day) rows = rows.filter(r => r.day === f.day);
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty"><div>${(f.name || f.day) ? "No activity matches that filter." : "No activity yet."}</div></div>`;
+    return;
+  }
   let html = "", lastDay = "";
   for (const r of rows) {
     if (r.day !== lastDay) { html += `<div class="bc-actday">${escapeHtml(fmtRunDate(r.day))}</div>`; lastDay = r.day; }
@@ -4778,6 +4810,8 @@ $("bcSaveBtn").addEventListener("click", saveBoxCountNow);
 // containers persist across re-renders of their contents).
 $("bcCountList").addEventListener("keydown", bcEnterToNext);
 $("bcSizesList").addEventListener("keydown", bcEnterToNext);
+$("bcActName").addEventListener("change", () => { state.boxActFilter.name = $("bcActName").value; renderBoxActivity(); });
+$("bcActDay").addEventListener("change", () => { state.boxActFilter.day = $("bcActDay").value; renderBoxActivity(); });
 document.querySelectorAll("[data-bcsearch]").forEach(inp => inp.addEventListener("input", () => {
   const v = inp.value.replace(/[^0-9]/g, "");
   if (v !== inp.value) inp.value = v;
