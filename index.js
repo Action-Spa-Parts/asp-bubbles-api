@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '61';
+const APP_VERSION = '62';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1368,12 +1368,16 @@ async function ensureTodayRun() {
     const orderedRemaining = remaining.slice().sort((a, b) =>
       (pos.has(a) ? pos.get(a) : 1e9) - (pos.has(b) ? pos.get(b) : 1e9));
 
-    // Avoid the same person two days in a row (e.g. across a cycle boundary).
-    const { rows: last } = await client.query(
-      'SELECT employee_id FROM checklist_runs ORDER BY run_date DESC, id DESC LIMIT 1');
-    const lastId = (last.length && last[0].employee_id != null) ? last[0].employee_id : -1;
-    let pickId = orderedRemaining[0];
-    if (pickId === lastId && orderedRemaining.length > 1) pickId = orderedRemaining[1];
+    // Don't reassign anyone who did the checklist in the last 3 days (this also
+    // covers back-to-back days, including across a cycle boundary). Skip them for
+    // now — they stay in the cycle and get picked once enough days have passed.
+    // Relax only if everyone left went recently (tiny roster), so a run is still assigned.
+    const { rows: rec } = await client.query(
+      `SELECT DISTINCT employee_id FROM checklist_runs WHERE employee_id IS NOT NULL AND run_date >= (${BIZ_DATE} - 3)`);
+    const recentSet = new Set(rec.map(r => r.employee_id));
+    let candidates = orderedRemaining.filter(id => !recentSet.has(id));
+    if (!candidates.length) candidates = orderedRemaining;
+    const pickId = candidates[0];
 
     // Persist the cycle order: keep current eligible (append newcomers, drop the rest).
     let newOrder = order.filter(id => eligSet.has(id));
