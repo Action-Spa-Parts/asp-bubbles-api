@@ -624,6 +624,12 @@
   .lp-status.ok { background:var(--good-soft); color:var(--good); }
   .lp-status.err { background:var(--danger-soft); color:var(--danger); }
   .lp-status.warn { background:#fef3c7; color:var(--warn); }
+  .lp-ordhead { font-weight:700; margin:10px 0 6px; }
+  .lp-ordrow { display:flex; align-items:flex-start; gap:10px; padding:9px 2px; border-bottom:1px solid var(--border); }
+  .lp-ordmain { flex:1; min-width:0; }
+  .lp-ordsub { color:var(--muted); font-size:13px; margin-top:1px; }
+  .lp-ordqty { color:var(--accent); font-weight:600; font-size:13px; }
+  .lp-ordbin { flex:0 0 auto; align-self:center; font-size:12px; font-weight:600; color:var(--muted); background:var(--accent-soft); border-radius:6px; padding:2px 7px; white-space:nowrap; }
   #lpPrinter.lp-on { color:var(--good); }
   #lpPrinter.lp-off { color:var(--warn); }
   .lp-setup { font-size:14px; color:var(--muted); border-top:1px solid var(--border); padding-top:12px; }
@@ -1193,6 +1199,22 @@
         </div>
       </details>
       </div><!-- /lpPrintView -->
+      <div id="lpOrderView" hidden>
+        <div class="lp-hint">Scan or type an order number to print a label for every line item on it. Labels print on the Zebra set on the Print tab.</div>
+        <label class="lp-field">
+          <span class="lp-lab">Order number</span>
+          <input id="lpOrderNo" type="text" inputmode="none" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Scan order… or tap to type">
+        </label>
+        <div class="lp-actions">
+          <button class="ghost" id="lpOrderClear" hidden>Clear</button>
+          <button class="primary" id="lpOrderLookup">Look up order</button>
+        </div>
+        <div id="lpOrderResult"></div>
+        <div class="lp-actions" id="lpOrderPrintRow" hidden>
+          <button class="primary" id="lpOrderPrint" style="width:100%;">🖨️ Print all labels</button>
+        </div>
+        <div class="lp-status" id="lpOrderStatus" hidden></div>
+      </div><!-- /lpOrderView -->
       <div id="lpActivityView" hidden>
         <h2 class="section" style="font-size:16px; margin-top:0;">Print activity</h2>
         <div class="filterbar lp-actbar">
@@ -1228,6 +1250,9 @@
 <nav class="bottomnav" id="lpNav" hidden>
   <button class="navbtn active" data-lptab="print">
     <span class="navicon">🏷️</span><span>Print</span>
+  </button>
+  <button class="navbtn" data-lptab="order">
+    <span class="navicon">📦</span><span>Order</span>
   </button>
   <button class="navbtn" data-lptab="activity" id="lpNavActivity" hidden>
     <span class="navicon">🧾</span><span>Activity</span>
@@ -2491,7 +2516,7 @@ async function refreshCurrent() {
    (action "enqueuePrint"); a small "print bridge" on the warehouse PC polls the
    server and sends the ZPL to the printer over the LAN. Here we just enqueue and
    show whether that bridge/PC is currently online. */
-const lp = { last: null, batch: [], actJobs: [], actSearch: "", actName: "", actDate: "", desc: "", descTimer: null };
+const lp = { last: null, batch: [], actJobs: [], actSearch: "", actName: "", actDate: "", desc: "", descTimer: null, order: null };
 
 function initLabelPrinter() {
   lpSetStatus("");
@@ -2763,8 +2788,81 @@ async function lpTestPrint() {
 function switchLpTab(name) {
   document.querySelectorAll("#lpNav .navbtn").forEach(b => b.classList.toggle("active", b.dataset.lptab === name));
   $("lpPrintView").hidden = name !== "print";
+  $("lpOrderView").hidden = name !== "order";
   $("lpActivityView").hidden = name !== "activity";
   if (name === "activity") lpLoadActivity();
+  if (name === "order") { try { $("lpOrderNo").focus(); } catch (_) {} }
+}
+
+// ----- Order labels: scan an order, print a label for each line item -----
+function lpOrderStatus(msg, kind) {
+  const el = $("lpOrderStatus");
+  if (!el) return;
+  el.hidden = !msg;
+  el.textContent = msg || "";
+  el.className = "lp-status" + (kind ? " " + kind : "");
+}
+
+async function lpLookupOrder() {
+  const raw = ($("lpOrderNo").value || "").replace(/[^0-9]/g, "");
+  if (!raw) { lpOrderStatus("Scan or type an order number first.", "err"); return; }
+  $("lpOrderLookup").disabled = true;
+  $("lpOrderResult").innerHTML = '<div class="empty">Looking up order ' + escapeHtml(raw) + '…</div>';
+  $("lpOrderPrintRow").hidden = true;
+  lpOrderStatus("");
+  try {
+    const r = await apiCall("getOrderLines", { pin: session.pin, order: raw });
+    if (!r || r.error) { $("lpOrderResult").innerHTML = '<div class="empty">' + escapeHtml((r && r.error) || "Couldn't look up that order.") + '</div>'; return; }
+    if (!r.found || !r.lines || !r.lines.length) { $("lpOrderResult").innerHTML = '<div class="empty">No line items found for order ' + escapeHtml(raw) + '.</div>'; return; }
+    lp.order = { no: r.order, lines: r.lines, customer: r.customer || "" };
+    lpRenderOrder();
+  } catch (e) {
+    $("lpOrderResult").innerHTML = '<div class="empty">Couldn\'t reach the server.</div>';
+  } finally { $("lpOrderLookup").disabled = false; }
+}
+
+function lpRenderOrder() {
+  const o = lp.order || { lines: [] };
+  const n = o.lines.length;
+  const head = '<div class="lp-ordhead">Order #' + escapeHtml(String(o.no)) +
+    (o.customer ? ' — ' + escapeHtml(o.customer) : '') +
+    ' · ' + n + ' line' + (n === 1 ? '' : 's') + '</div>';
+  const rows = o.lines.map(function (l) {
+    return '<div class="lp-ordrow"><div class="lp-ordmain"><b>' + escapeHtml(l.item) + '</b>' +
+      (l.qty > 1 ? ' <span class="lp-ordqty">×' + l.qty + '</span>' : '') +
+      '<div class="lp-ordsub">' + escapeHtml(l.descr || '') + '</div></div>' +
+      (l.location ? '<span class="lp-ordbin">' + escapeHtml(l.location) + '</span>' : '') + '</div>';
+  }).join("");
+  $("lpOrderResult").innerHTML = head + rows;
+  $("lpOrderPrint").textContent = "🖨️ Print all labels (" + n + ")";
+  $("lpOrderPrintRow").hidden = false;
+  $("lpOrderClear").hidden = false;
+}
+
+async function lpPrintOrder() {
+  const o = lp.order;
+  if (!o || !o.lines || !o.lines.length) return;
+  $("lpOrderPrint").disabled = true;
+  lpOrderStatus("Sending " + o.lines.length + " label" + (o.lines.length === 1 ? "" : "s") + "…");
+  try {
+    const r = await apiCall("printOrderLabels", { pin: session.pin, order: o.no, printerId: lpSelectedPrinterId() });
+    if (!r || r.error) { lpOrderStatus((r && r.error) || "Print failed.", "err"); return; }
+    const printed = r.printed || 0, req = r.requested || o.lines.length;
+    if (r.failed) lpOrderStatus("Printed " + printed + " of " + req + " — " + (r.lastError || "some failed"), printed ? "warn" : "err");
+    else lpOrderStatus("Printed " + printed + " label" + (printed === 1 ? "" : "s") + " ✓" + (r.via === "bridge" && !r.bridgeOnline ? " — queued (print PC offline)" : ""), "ok");
+  } catch (e) {
+    lpOrderStatus("Couldn't reach the server.", "err");
+  } finally { $("lpOrderPrint").disabled = false; }
+}
+
+function lpClearOrder() {
+  lp.order = null;
+  $("lpOrderNo").value = "";
+  $("lpOrderResult").innerHTML = "";
+  $("lpOrderPrintRow").hidden = true;
+  $("lpOrderClear").hidden = true;
+  lpOrderStatus("");
+  try { $("lpOrderNo").focus(); } catch (_) {}
 }
 
 // Manager-only: recent print activity (who printed what, when, result).
@@ -4776,6 +4874,10 @@ $("lpCancel").addEventListener("click", lpCancelCurrent);
 $("lpClear").addEventListener("click", lpClearAll);
 $("lpPrint").addEventListener("click", lpPrintBatch);
 $("lpReprint").addEventListener("click", lpReprintLast);
+$("lpOrderLookup").addEventListener("click", lpLookupOrder);
+$("lpOrderPrint").addEventListener("click", lpPrintOrder);
+$("lpOrderClear").addEventListener("click", lpClearOrder);
+$("lpOrderNo").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); lpLookupOrder(); } });
 $("lpBatchList").addEventListener("click", (e) => { const b = e.target.closest(".lp-bx"); if (b) lpRemoveBatch(parseInt(b.dataset.bi, 10)); });
 $("lpDupMinus").addEventListener("click", () => { $("lpDupQty").value = Math.max(1, lpDupQtyVal() - 1); });
 $("lpDupPlus").addEventListener("click", () => { $("lpDupQty").value = Math.min(999, lpDupQtyVal() + 1); });

@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '72';
+const APP_VERSION = '73';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1793,8 +1793,10 @@ async function enqueuePrint(who, body) {
     }
   }
 
-  // Real description from the imported parts list (blank if the code is unknown).
-  const description = await lookupDescription(code);
+  // Real description from the imported parts list; fall back to one passed in
+  // (e.g. an order line's own description) when the part isn't in the list.
+  const looked = await lookupDescription(code);
+  const description = looked || (body && body.desc ? String(body.desc) : '');
   const zpl = buildLabelZpl(code, qty, description);
   const batchId = (body && body.batchId) ? String(body.batchId).slice(0, 40) : null;
   const { rows } = await pool.query(
@@ -1960,7 +1962,7 @@ async function importPartDescriptions(body) {
 // back on the SSE stream. Auth = the ?key in the URL (set as a Railway env var).
 const ERP_ITEM_QUERY = process.env.ERP_ITEM_QUERY || 'FOR EACH item WHERE company_it = "ASPL" AND item <> ""';
 
-async function erpFetchItems(query, columns) {
+async function withErpSession(fn) {
   const sseUrl = process.env.ERP_MCP_URL;
   if (!sseUrl) throw new Error('ERP_MCP_URL is not set');
   const origin = new URL(sseUrl).origin;
@@ -2015,38 +2017,115 @@ async function erpFetchItems(query, columns) {
     await Promise.race([endpointReady, withTimeout()]);
     await rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'asp-warehouse', version: '1.0' } });
     await notify('notifications/initialized');
+    return await fn(rpc);
+  } finally {
+    try { ac.abort(); } catch (_) {}
+  }
+}
 
+// Pull the records array out of one dq_read MCP response.
+function erpRecordsFrom(m) {
+  if (m.error) throw new Error(m.error.message || 'dq_read error');
+  const txt = m.result && m.result.content && m.result.content[0] && m.result.content[0].text;
+  const parsed = txt ? JSON.parse(txt) : (m.result && m.result.structuredContent) || {};
+  return parsed.records || [];
+}
+
+// ERP-ONE word-wraps descriptions into 30-char segments. Rejoin: a space where a
+// segment ended before 30 chars (wrapped at a real space), nothing where it
+// filled the full 30 (a mid-word hard chop). Reproduces the original text.
+function rejoinDescr(descr) {
+  const arr = Array.isArray(descr) ? descr : [descr];
+  const segs = [];
+  for (const s of arr) { const v = (s == null ? '' : String(s)); if (v === '') break; segs.push(v); }
+  let out = '';
+  for (let k = 0; k < segs.length; k++) {
+    if (k > 0 && segs[k - 1].length < 30) out += ' ';
+    out += segs[k];
+  }
+  return out.trim();
+}
+
+// One small single-page read — for ad-hoc look-ups like order lines.
+async function erpReadRecords(query, columns, take) {
+  return withErpSession(async (rpc) =>
+    erpRecordsFrom(await rpc('tools/call', { name: 'dq_read', arguments: { query, columns, skip: 0, take: take || 100 } })));
+}
+
+// Full paginated item pull for the weekly parts-description sync.
+async function erpFetchItems(query, columns) {
+  return withErpSession(async (rpc) => {
     const items = [];
     const PAGE = 5000;
     for (let skip = 0; skip <= 200000; skip += PAGE) {
-      const m = await rpc('tools/call', { name: 'dq_read', arguments: { query, columns, skip, take: PAGE } });
-      if (m.error) throw new Error(m.error.message || 'dq_read error');
-      const txt = m.result && m.result.content && m.result.content[0] && m.result.content[0].text;
-      const parsed = txt ? JSON.parse(txt) : (m.result && m.result.structuredContent) || {};
-      const recs = parsed.records || [];
+      const recs = erpRecordsFrom(await rpc('tools/call', { name: 'dq_read', arguments: { query, columns, skip, take: PAGE } }));
       for (const rec of recs) {
         const code = String(rec.item || '').trim();
         if (!code) continue;
-        // descr is word-wrapped into 30-char segments. Rejoin: put a space where
-        // a segment ended before the 30-char width (wrapped at a real space), and
-        // nothing where it filled the full 30 (a mid-word hard chop). This
-        // reproduces the original descriptions (freeform is truncated/normalized).
-        const arr = Array.isArray(rec.descr) ? rec.descr : [rec.descr];
-        const segs = [];
-        for (const s of arr) { const v = (s == null ? '' : String(s)); if (v === '') break; segs.push(v); }
-        let description = '';
-        for (let k = 0; k < segs.length; k++) {
-          if (k > 0 && segs[k - 1].length < 30) description += ' ';
-          description += segs[k];
-        }
-        items.push({ code, description: description.trim() });
+        items.push({ code, description: rejoinDescr(rec.descr) });
       }
       if (recs.length < PAGE) break;
     }
     return items;
-  } finally {
-    try { ac.abort(); } catch (_) {}
+  });
+}
+
+// ----- Order labels: scan an order → a label per line item -----
+// ERP-ONE stores OPEN orders with a NEGATIVE order number and invoiced ones
+// positive. A picker scans/keys the order number (any non-digits are stripped);
+// we try the open (negative) form first, then the invoiced (positive) form.
+async function fetchOrderLines(orderInput) {
+  const digits = String(orderInput == null ? '' : orderInput).replace(/[^0-9]/g, '');
+  if (!digits) return { error: 'Enter or scan an order number.' };
+  const n = parseInt(digits, 10);
+  if (!Number.isFinite(n) || n <= 0) return { error: 'That does not look like an order number.' };
+  const cols = 'order,line,item,descr,location,q_ord';
+  const q = (ord) => `FOR EACH oe_line NO-LOCK WHERE oe_line.company_oe = 'ASPL' AND oe_line.order = ${ord} AND oe_line.item <> ''`;
+  let signed = -n;
+  let recs = await erpReadRecords(q(-n), cols, 250);          // open order (negative) first
+  if (!recs.length) { signed = n; recs = await erpReadRecords(q(n), cols, 250); }  // else invoiced (positive)
+  const lines = recs
+    .map(r => ({ line: Number(r.line) || 0, item: String(r.item || '').trim(), descr: rejoinDescr(r.descr), qty: Number(r.q_ord) || 0, location: String(r.location || '').trim() }))
+    .filter(r => r.item)
+    .sort((a, b) => a.line - b.line);
+  return { order: n, signedOrder: signed, lines };
+}
+
+async function getOrderLines(who, body) {
+  if (!who) return { error: 'Please sign in.' };
+  if (!process.env.ERP_MCP_URL) return { error: 'Order lookup is not set up (ERP connection missing).' };
+  let res;
+  try { res = await fetchOrderLines(body && body.order); }
+  catch (e) { return { error: (e && e.message) ? e.message : 'Order lookup failed.' }; }
+  if (res.error) return res;
+  if (!res.lines.length) return { order: res.order, found: false, lines: [] };
+  let customer = '';
+  try {
+    const h = await erpReadRecords(`FOR EACH oe_head NO-LOCK WHERE oe_head.company_oe = 'ASPL' AND oe_head.order = ${res.signedOrder}`, 'order,name', 1);
+    if (h.length) customer = String(h[0].name || '').trim();
+  } catch (_) { /* customer name is a nice-to-have */ }
+  return { order: res.order, found: true, customer, lines: res.lines };
+}
+
+async function printOrderLabels(who, body) {
+  if (!who) return { error: 'Please sign in.' };
+  if (!process.env.ERP_MCP_URL) return { error: 'Order lookup is not set up (ERP connection missing).' };
+  let res;
+  try { res = await fetchOrderLines(body && body.order); }
+  catch (e) { return { error: (e && e.message) ? e.message : 'Order lookup failed.' }; }
+  if (res.error) return res;
+  if (!res.lines.length) return { error: 'No line items found for order ' + res.order + '.' };
+  const batchId = ('ord' + res.order + '-' + Date.now()).slice(0, 40);
+  let printed = 0, failed = 0, lastError = '', via = '';
+  for (const ln of res.lines) {
+    const r = await enqueuePrint(who, { code: ln.item, qty: 1, desc: ln.descr, printerId: body && body.printerId, batchId });
+    if (r && r.ok) { printed++; via = r.via || via; }
+    else {
+      failed++; lastError = (r && r.error) || 'print failed';
+      if (/limit/i.test(lastError)) break;   // daily cloud cap hit — stop and report partial
+    }
   }
+  return { order: res.order, requested: res.lines.length, printed, failed, lastError, via, bridgeOnline: await bridgeOnline() };
 }
 
 // Pull the full item list from the ERP and replace the description set.
@@ -2767,6 +2846,8 @@ app.post('/', async (req, res) => {
         case 'getEomLog':    out = await getEomLog(who); break;
         // ----- Label Printer -----
         case 'enqueuePrint':   out = await enqueuePrint(who, body); break;
+        case 'getOrderLines':    out = await getOrderLines(who, body); break;
+        case 'printOrderLabels': out = await printOrderLabels(who, body); break;
         case 'getPrintStatus': out = await getPrintStatus(who); break;
         case 'getCloudSettings': out = await getCloudSettings(who); break;
         case 'setCloudSettings': out = await setCloudSettings(who, body); break;
