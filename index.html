@@ -1099,10 +1099,6 @@
 
   <!-- ===== Employee of the Month app ===== -->
   <div id="eomScreen" hidden>
-    <div class="bc-tabs">
-      <button class="eom-tab active" data-eomtab="vote">Vote</button>
-      <button class="eom-tab" data-eomtab="log">Past winners</button>
-    </div>
     <div id="eomVoteView"><div id="eomBody"></div></div>
     <div id="eomLogView" hidden>
       <div class="filterbar"><label for="eomLogPeriod">Month</label><select id="eomLogPeriod"><option value="">—</option></select></div>
@@ -1228,6 +1224,15 @@
   </button>
   <button class="navbtn" data-bctab="sizes">
     <span class="navicon">📦</span><span>Sizes &amp; inventory</span>
+  </button>
+</nav>
+
+<nav class="bottomnav" id="eomNav" hidden>
+  <button class="navbtn active" data-eomtab="vote">
+    <span class="navicon">🗳️</span><span>Vote</span>
+  </button>
+  <button class="navbtn" data-eomtab="log">
+    <span class="navicon">🏆</span><span>Past winners</span>
   </button>
 </nav>
 
@@ -2215,6 +2220,7 @@ function showScreen(name) {
   document.querySelector(".bottomnav").hidden = name !== "bubbles";
   if (name !== "label") $("lpNav").hidden = true;   // shown for managers on the label screen (see lpShowPrinterStatus)
   $("bcNav").hidden = name !== "boxcounter";          // Box Counter's own bottom tab bar
+  $("eomNav").hidden = name !== "eom";                // Employee of the Month bottom tab bar
   // The home screen has its own centered hero, so hide the duplicate top header there.
   document.querySelector("header.top").hidden = name === "home";
   $("homeBtn").hidden = name === "home";
@@ -3237,7 +3243,7 @@ function switchEomTab(tab) {
   state.eomTab = tab;
   $("eomVoteView").hidden = tab !== "vote";
   $("eomLogView").hidden = tab !== "log";
-  document.querySelectorAll(".eom-tab").forEach(b => b.classList.toggle("active", b.dataset.eomtab === tab));
+  document.querySelectorAll("[data-eomtab]").forEach(b => b.classList.toggle("active", b.dataset.eomtab === tab));
   if (tab === "log") loadEomLog();
 }
 
@@ -4636,7 +4642,7 @@ $("tileBubbles").addEventListener("click", openBubbles);
 $("tileChecklist").addEventListener("click", () => showScreen("checklist"));
 $("tileBoxCounter").addEventListener("click", () => showScreen("boxcounter"));
 $("tileEom").addEventListener("click", () => showScreen("eom"));
-document.querySelectorAll(".eom-tab").forEach(b => b.addEventListener("click", () => switchEomTab(b.dataset.eomtab)));
+document.querySelectorAll("[data-eomtab]").forEach(b => b.addEventListener("click", () => switchEomTab(b.dataset.eomtab)));
 
 // Label Printer controls.
 $("tileLabel").addEventListener("click", () => showScreen("label"));
