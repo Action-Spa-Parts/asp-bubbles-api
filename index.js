@@ -252,6 +252,36 @@ async function ensureSchema() {
     }
   }
 
+  {
+    // The Box Counter activity log shipped (v71) AFTER the first counts were
+    // already entered, so it started blank. One-time: reconstruct the history
+    // from box_sizes — the original inventory setup plus every count already
+    // done (grouped by who + Pacific day) — so the log isn't empty.
+    const done = await pool.query(`SELECT 1 FROM app_migrations WHERE name = 'box_activity_backfill_v1'`);
+    if (!done.rows.length) {
+      const { rows: counts } = await pool.query(`
+        SELECT last_counted_by AS by, max(last_counted_at) AS at, count(*)::int AS n
+          FROM box_sizes
+         WHERE last_counted_at IS NOT NULL AND coalesce(last_counted_by, '') <> ''
+         GROUP BY last_counted_by, to_char(last_counted_at AT TIME ZONE 'America/Los_Angeles', 'YYYY-MM-DD')
+         ORDER BY max(last_counted_at)`);
+      if (counts.length) {
+        const mainBy = counts[counts.length - 1].by;  // most recent counter set up the original inventory
+        const { rows: o } = await pool.query(`SELECT min(created_at) AS at, count(*)::int AS n FROM box_sizes`);
+        await pool.query(
+          `INSERT INTO box_activity (ts, person, action, detail) VALUES ($1, $2, 'setup', $3)`,
+          [o[0].at, mainBy, `Entered the starting box inventory (${o[0].n} box sizes)`]);
+        for (const c of counts) {
+          await pool.query(
+            `INSERT INTO box_activity (ts, person, action, detail) VALUES ($1, $2, 'count', $3)`,
+            [c.at, c.by, `Counted ${c.n} box size${c.n === 1 ? '' : 's'}`]);
+        }
+        console.log(`Schema: backfilled Box Counter activity (${counts.length + 1} entries).`);
+      }
+      await pool.query(`INSERT INTO app_migrations (name) VALUES ('box_activity_backfill_v1') ON CONFLICT DO NOTHING`);
+    }
+  }
+
   // Clean up any not-yet-completed runs that landed on a closed day (e.g. a
   // Sunday run created before this rule existed). Leaves completed history alone.
   if (CLOSED_DOWS.length) {
