@@ -2078,11 +2078,14 @@ function activityByDayHtml(list, opts, autoOpen) {
   opts = opts || {};
   const capped = list.slice(0, 300);
   const cancelledMap = computeCancelled(capped);
+  // Hide reversed entries entirely (the Undo and the original it cancelled) — an
+  // undone award nets to zero, so it's just noise in the feed.
+  const visible = capped.filter(a => !cancelledMap.get(a));
   const order = [], byDay = {};
-  capped.forEach(a => { const d = localYMD(a.Timestamp) || ""; if (!byDay[d]) { byDay[d] = []; order.push(d); } byDay[d].push(a); });
+  visible.forEach(a => { const d = localYMD(a.Timestamp) || ""; if (!byDay[d]) { byDay[d] = []; order.push(d); } byDay[d].push(a); });
   return order.map(d => {
     const rows = byDay[d];
-    const body = rows.map(a => activityRowHtml(a, cancelledMap.get(a), opts)).join("");
+    const body = rows.map(a => activityRowHtml(a, false, opts)).join("");
     const head = (d ? escapeHtml(lpDayLabel(d)) : "Undated") + " · " + rows.length + " action" + (rows.length === 1 ? "" : "s");
     return '<details class="lp-day"' + (autoOpen ? " open" : "") + '><summary>' + head +
       '</summary><div class="lp-day-body">' + body + '</div></details>';
@@ -2118,7 +2121,8 @@ function renderActivity() {
       el.innerHTML = `<div class="empty"><h3>No matches</h3><div>Nothing for that name and/or date. Tap Clear to reset.</div></div>`;
       return;
     }
-    el.innerHTML = activityByDayHtml(filtered, { withDelete: true }, !!(fName || fDate));
+    el.innerHTML = activityByDayHtml(filtered, { withDelete: true }, !!(fName || fDate))
+      || `<div class="empty"><h3>No activity</h3><div>Nothing to show here.</div></div>`;
     el.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => deleteTransaction(parseInt(b.dataset.del, 10))));
     return;
   }
@@ -2160,9 +2164,8 @@ function renderActivity() {
   const filteredOthers = others.filter(a =>
     (!fName || String(a.Name || "") === fName) &&
     (!fDate || localYMD(a.Timestamp) === fDate));
-  ol.innerHTML = filteredOthers.length
-    ? activityByDayHtml(filteredOthers, { withDelete: false }, !!(fName || fDate))
-    : `<div class="empty"><h3>No matches</h3><div>Nothing for that name and/or date. Tap Clear to reset.</div></div>`;
+  ol.innerHTML = (filteredOthers.length && activityByDayHtml(filteredOthers, { withDelete: false }, !!(fName || fDate)))
+    || `<div class="empty"><h3>No matches</h3><div>Nothing for that name and/or date. Tap Clear to reset.</div></div>`;
 }
 
 function switchView(view) {
