@@ -593,6 +593,7 @@
   .lp-back { margin-bottom:10px; }
   .turn-badge.lp-soon { background:var(--accent-soft); color:var(--accent); }
   .lp-wrap { max-width:520px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
+  .lp-wrap.lp-wide { max-width:none; }   /* activity log fills the page like the Bubbles log */
   .lp-hint { color:var(--muted); font-size:14px; }
   .lp-field { display:flex; flex-direction:column; gap:6px; }
   .lp-lab { font-size:13px; font-weight:600; color:var(--muted); }
@@ -2785,6 +2786,10 @@ function switchLpTab(name) {
   document.querySelectorAll("#lpNav .navbtn").forEach(b => b.classList.toggle("active", b.dataset.lptab === name));
   $("lpPrintView").hidden = name !== "print";
   $("lpActivityView").hidden = name !== "activity";
+  // The activity log fills the full page width (like Bubbles' log); the scan
+  // form stays narrow.
+  const wrap = document.querySelector("#labelScreen .lp-wrap");
+  if (wrap) wrap.classList.toggle("lp-wide", name === "activity");
   if (name === "activity") lpLoadActivity();
 }
 
@@ -2911,9 +2916,9 @@ function lpFillActNames() {
 function lpActRow(j) {
   const st = j.status === "printed" ? "✓ printed" : (j.status === "error" ? "✗ error" : (j.status === "pending" ? "queued" : escapeHtml(j.status)));
   const cls = j.status === "printed" ? "lp-ok" : (j.status === "error" ? "lp-err2" : "lp-muted");
-  return '<div class="lp-act"><div class="lp-act-main"><b>' + escapeHtml(j.code) + '</b> × ' + j.qty +
+  return '<div class="lp-act"><div class="lp-act-main"><b class="lp-who">' + escapeHtml(j.who || '—') + '</b>' +
     ' <span class="' + cls + '">' + st + '</span></div><div class="lp-act-sub">' +
-    'by <b class="lp-who">' + escapeHtml(j.who || '—') + '</b> · ' + escapeHtml(j.at || '') + (j.error ? ' · ' + escapeHtml(j.error) : '') + '</div></div>';
+    '<b>' + escapeHtml(j.code) + '</b> × ' + j.qty + ' · ' + escapeHtml(j.at || '') + (j.error ? ' · ' + escapeHtml(j.error) : '') + '</div></div>';
 }
 
 function lpDayLabel(d) {
@@ -2968,7 +2973,7 @@ function lpRenderActivity() {
     const by = tot.by || {};
     const who = Object.keys(by).sort(function (a, b) { return by[b] - by[a]; })
       .map(function (p) { return '<b class="lp-who">' + escapeHtml(p) + '</b> ' + by[p]; }).join(' · ');
-    return '<details class="lp-day"' + ((anyFilter || di === 0) ? " open" : "") + '><summary>' + lpDayLabel(d) +
+    return '<details class="lp-day"' + (anyFilter ? " open" : "") + '><summary>' + lpDayLabel(d) +
       ' · <span class="' + cls + '">' + tot.calls + '/100 calls</span> · ' + tot.labels + ' labels' +
       (who ? '<span class="lp-daywho">👤 ' + who + '</span>' : '') + '</summary>' +
       '<div class="lp-day-body">' + body + '</div></details>';
