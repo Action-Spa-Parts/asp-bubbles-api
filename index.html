@@ -620,6 +620,15 @@
   .lp-confirm { min-height:22px; font-size:16px; line-height:1.3; padding:4px 2px 2px; }
   .lp-confirm .lp-confirm-code { font-weight:800; color:var(--accent); letter-spacing:.3px; }
   .lp-confirm .lp-confirm-muted { color:var(--muted); font-weight:600; }
+  /* Verify-before-print card */
+  .lp-vfy { background:var(--accent-soft); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
+  .lp-vfy.loading { color:var(--muted); font-weight:600; }
+  .lp-vfy.ok { background:var(--good-soft); border-color:var(--good); }
+  .lp-vfy-q { font-size:13px; font-weight:600; color:var(--muted); margin-bottom:4px; }
+  .lp-vfy-code { font-size:24px; font-weight:800; letter-spacing:-0.01em; }
+  .lp-vfy-desc { font-size:15px; line-height:1.35; margin-top:4px; }
+  .lp-vfy-note { font-size:13px; font-weight:700; color:var(--good); margin-top:8px; }
+  .lp-vfy-btn { width:100%; margin-top:12px; padding:15px; font-size:17px; }
   .lp-previewwrap { display:flex; flex-direction:column; align-items:center; gap:6px; }
   .lp-label { width:300px; height:150px; background:#fff; border:1px solid #d4d4d4; border-radius:6px; box-shadow:var(--shadow-card); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:10px; }
   .lp-desc { font-size:12px; color:#000; text-align:center; max-width:280px; line-height:1.2; }
@@ -2511,7 +2520,7 @@ async function refreshCurrent() {
    (action "enqueuePrint"); a small "print bridge" on the warehouse PC polls the
    server and sends the ZPL to the printer over the LAN. Here we just enqueue and
    show whether that bridge/PC is currently online. */
-const lp = { last: null, batch: [], actJobs: [], actSearch: "", actName: "", actDate: "", desc: "", descTimer: null, order: null };
+const lp = { last: null, batch: [], actJobs: [], actSearch: "", actName: "", actDate: "", desc: "", descTimer: null, order: null, confirmed: false, descLoading: false };
 
 function initLabelPrinter() {
   lpSetStatus("");
@@ -2548,24 +2557,55 @@ function lpRenderPreview() {
   lpUpdatePrintLabel();
 }
 
-// Fetch the description for the scanned code (debounced) and show a compact
-// "code · description" confirmation line so a mis-scan is caught before printing.
-// The printed label uses the server's own lookup regardless.
+// Fetch the description for the scanned code (debounced), then show a
+// verification card (SKU + full description) that must be CONFIRMED before the
+// label can print — so a picker can't print a label for the wrong item.
 function lpLookupDesc(code) {
   clearTimeout(lp.descTimer);
   const c = lpCleanCode(code);
-  const el = $("lpConfirm");
-  if (!c) { lp.desc = ""; if (el) el.innerHTML = ""; return; }
-  if (el) el.innerHTML = `<span class="lp-confirm-code">${escapeHtml(c)}</span> <span class="lp-confirm-muted">· …</span>`;
+  lp.confirmed = false;                 // a new/changed part must be re-confirmed
+  if (!c) { lp.desc = ""; lp.descLoading = false; lpRenderConfirm(); return; }
+  lp.descLoading = true; lpRenderConfirm();
   lp.descTimer = setTimeout(async () => {
     let desc = "";
     try { const r = await apiCall("lookupPart", { pin: session.pin, code: c }); desc = (r && r.description) || ""; } catch (_) {}
     if (lpCleanCode($("lpCode").value) !== c) return;   // code changed while waiting
-    lp.desc = desc;
-    const shown = desc ? lpImportantDesc(desc) : "(no description on file)";
-    if (el) el.innerHTML = `<span class="lp-confirm-code">${escapeHtml(c)}</span> <span class="lp-confirm-muted">· ${escapeHtml(shown)}</span>`;
+    lp.desc = desc; lp.descLoading = false;
+    lpRenderConfirm();
     lpUpdatePrintLabel();
   }, 250);
+}
+
+// Render the verify-before-print card based on the current code + desc + state.
+function lpRenderConfirm() {
+  const el = $("lpConfirm"); if (!el) return;
+  const c = lpCleanCode($("lpCode").value);
+  if (!c) { el.innerHTML = ""; return; }
+  if (lp.descLoading) {
+    el.innerHTML = '<div class="lp-vfy loading"><span class="lp-vfy-code">' + escapeHtml(c) + '</span> · looking up…</div>';
+    return;
+  }
+  const descHtml = lp.desc ? escapeHtml(lp.desc) : '<i>No description on file — double-check this is the right part.</i>';
+  if (lp.confirmed) {
+    el.innerHTML = '<div class="lp-vfy ok"><div class="lp-vfy-code">✓ ' + escapeHtml(c) + '</div>' +
+      '<div class="lp-vfy-desc">' + descHtml + '</div>' +
+      '<div class="lp-vfy-note">Confirmed — set the quantity and print.</div></div>';
+  } else {
+    el.innerHTML = '<div class="lp-vfy"><div class="lp-vfy-q">Is this the item in your hand?</div>' +
+      '<div class="lp-vfy-code">' + escapeHtml(c) + '</div>' +
+      '<div class="lp-vfy-desc">' + descHtml + '</div>' +
+      '<button type="button" class="primary lp-vfy-btn" id="lpConfirmBtn">✓ Yes — this is the item</button></div>';
+    const btn = $("lpConfirmBtn"); if (btn) btn.addEventListener("click", lpConfirmItem);
+  }
+}
+
+// Picker confirms the shown part matches the physical item → printing unlocks.
+function lpConfirmItem() {
+  if (!lpCleanCode($("lpCode").value)) return;
+  lp.confirmed = true;
+  lpRenderConfirm();
+  lpUpdatePrintLabel();
+  try { $("lpQty").focus(); $("lpQty").select(); } catch (_) {}
 }
 
 // Mirror of the server's importantDesc: keep the leading part that prints.
@@ -2717,11 +2757,13 @@ function lpRenderBatch() {
   lpUpdatePrintLabel();
 }
 function lpUpdatePrintLabel() {
-  const cur = lpCleanCode($("lpCode").value) ? 1 : 0;
-  const n = lp.batch.length + cur;
+  const hasCur = !!lpCleanCode($("lpCode").value);
+  const n = lp.batch.length + (hasCur ? 1 : 0);
   $("lpPrint").textContent = n > 1 ? ("🖨️ Print " + n + " items") : "🖨️ Print label";
-  $("lpPrint").disabled = n === 0;
-  $("lpAdd").disabled = cur === 0;
+  // A part in the box must be CONFIRMED before it can print or be added to a batch
+  // (queued batch items were already confirmed when added).
+  $("lpPrint").disabled = hasCur ? !lp.confirmed : (lp.batch.length === 0);
+  $("lpAdd").disabled = !(hasCur && lp.confirmed);
   const cl = $("lpClear"); if (cl) cl.hidden = n === 0;   // Clear shows once something's scanned/queued
 }
 
