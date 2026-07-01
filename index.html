@@ -4893,22 +4893,23 @@ document.querySelectorAll("[data-eomtab]").forEach(b => b.addEventListener("clic
 
 // Label Printer controls.
 $("tileLabel").addEventListener("click", () => showScreen("label"));
-// ---- No on-screen keyboard, anywhere ----
-// The handhelds (and the office PC) have physical keys, and the soft keyboard
-// kept covering the app. So force inputmode="none" on every field, always — the
-// soft keyboard never shows; hardware keys still type into the focused field.
+// ---- No on-screen keyboard on the LABEL PRINTER only ----
+// The Label Printer's scan fields auto-focus and the soft keyboard kept covering
+// the screen while scanning on the handhelds. Suppress it there — but ONLY there.
+// Everywhere else (login, forms) the keyboard works normally, so a touch-only
+// device with no physical keys (e.g. an iPad) can still type to sign in.
 (function killSoftKeyboard() {
   function suppress(el) {
     if (!el || (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA")) return;
+    if (!(el.closest && el.closest("#labelScreen"))) return;   // Label Printer only
     // type="number" forces the numeric keypad on some Android builds even with
     // inputmode="none" — turn it into a plain text field (we parse values in JS).
     if (el.tagName === "INPUT" && el.type === "number") { try { el.type = "text"; } catch (_) {} }
     el.inputMode = "none";
   }
-  // Before focus (tap) and on focus — belt and suspenders so it can't slip through.
   document.addEventListener("pointerdown", (e) => { const el = e.target.closest ? e.target.closest("input, textarea") : null; suppress(el); }, true);
   document.addEventListener("focusin", (e) => suppress(e.target), true);
-  document.querySelectorAll("input, textarea").forEach(suppress);
+  document.querySelectorAll("#labelScreen input, #labelScreen textarea").forEach(suppress);
 })();
 
 $("lpCode").addEventListener("input", lpRenderPreview);
