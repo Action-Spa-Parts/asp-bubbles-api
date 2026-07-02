@@ -2597,24 +2597,17 @@ function lpRenderConfirm() {
   if (!lp.photoHidden) {
     photoBlock = '<div class="lp-vfy-photo" id="lpVfyPhoto">' +
       '<img class="lp-vfy-img" alt="" src="https://api.actionspaparts.com/Content/item/' + encodeURIComponent(c) + '.webp">' +
-      '<div class="lp-vfy-photonote">Reference photo from the website — trust the description below' +
+      '<div class="lp-vfy-photonote">Reference photo from the website' +
       (isMgr ? ' <button type="button" class="lp-linkbtn" id="lpHidePhotoBtn">🚫 Hide (wrong photo)</button>' : '') +
       '</div></div>';
   } else if (isMgr) {
     photoBlock = '<div class="lp-vfy-photonote">Photo hidden for this part. <button type="button" class="lp-linkbtn" id="lpShowPhotoBtn">Show photo</button></div>';
   }
-  if (lp.confirmed) {
-    el.innerHTML = '<div class="lp-vfy ok">' + photoBlock + '<div class="lp-vfy-code">✓ ' + escapeHtml(c) + '</div>' +
-      '<div class="lp-vfy-desc">' + descHtml + '</div>' +
-      '<div class="lp-vfy-note">Confirmed — set the quantity and print.</div></div>';
-  } else {
-    el.innerHTML = '<div class="lp-vfy"><div class="lp-vfy-q">Is this the item in your hand?</div>' +
-      photoBlock +
-      '<div class="lp-vfy-code">' + escapeHtml(c) + '</div>' +
-      '<div class="lp-vfy-desc">' + descHtml + '</div>' +
-      '<button type="button" class="primary lp-vfy-btn" id="lpConfirmBtn">✓ Yes — this is the item</button></div>';
-    const btn = $("lpConfirmBtn"); if (btn) btn.addEventListener("click", lpConfirmItem);
-  }
+  // Passive reference only (no confirm gate): show what was scanned so a mis-scan
+  // is easy to spot; printing is enabled immediately.
+  el.innerHTML = '<div class="lp-vfy">' + photoBlock +
+    '<div class="lp-vfy-code">' + escapeHtml(c) + '</div>' +
+    '<div class="lp-vfy-desc">' + descHtml + '</div></div>';
   // No photo for this part → hide the whole photo block so no orphan caption/button shows.
   const img = el.querySelector(".lp-vfy-img");
   if (img) img.addEventListener("error", function () { const box = $("lpVfyPhoto"); if (box) box.style.display = "none"; });
@@ -2793,10 +2786,8 @@ function lpUpdatePrintLabel() {
   const hasCur = !!lpCleanCode($("lpCode").value);
   const n = lp.batch.length + (hasCur ? 1 : 0);
   $("lpPrint").textContent = n > 1 ? ("🖨️ Print " + n + " items") : "🖨️ Print label";
-  // A part in the box must be CONFIRMED before it can print or be added to a batch
-  // (queued batch items were already confirmed when added).
-  $("lpPrint").disabled = hasCur ? !lp.confirmed : (lp.batch.length === 0);
-  $("lpAdd").disabled = !(hasCur && lp.confirmed);
+  $("lpPrint").disabled = n === 0;
+  $("lpAdd").disabled = !hasCur;
   const cl = $("lpClear"); if (cl) cl.hidden = n === 0;   // Clear shows once something's scanned/queued
 }
 
