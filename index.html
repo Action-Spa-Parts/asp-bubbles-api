@@ -279,6 +279,16 @@
     color: var(--muted);
     margin-bottom: 6px;
   }
+  /* Custom "give bubbles for any reason" section in the award modal */
+  .acustom { margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--border); }
+  .acustom .ctitle { font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:6px; }
+  #aCustomReason { width:100%; box-sizing:border-box; padding:11px 12px; font-size:15px; border:1px solid var(--border); border-radius:10px; font-family:inherit; }
+  .acustom-row { display:flex; gap:10px; margin-top:8px; align-items:stretch; }
+  .acustom-amt { display:flex; align-items:stretch; border:1px solid var(--border); border-radius:10px; overflow:hidden; flex:0 0 auto; }
+  .acustom-amt button { border:none; background:var(--surface); width:38px; font-size:20px; line-height:1; cursor:pointer; color:inherit; }
+  .acustom-amt input { width:48px; text-align:center; border:none; border-left:1px solid var(--border); border-right:1px solid var(--border); font-size:16px; font-family:inherit; }
+  .acustom-row .primary { flex:1; padding:12px; font-size:16px; }
+  .acustom-msg { font-size:12px; color:var(--danger); margin-top:6px; min-height:14px; }
   .rules {
     display: flex;
     flex-wrap: wrap;
@@ -1319,6 +1329,19 @@
       </div>
     </div>
     <div class="dbody">
+      <div class="acustom">
+        <div class="ctitle">Give bubbles for any reason</div>
+        <input id="aCustomReason" type="text" maxlength="80" autocomplete="off" placeholder="Reason — e.g. Stayed late to finish shipping">
+        <div class="acustom-row">
+          <div class="acustom-amt">
+            <button type="button" id="aCustomMinus" aria-label="Fewer">−</button>
+            <input id="aCustomAmt" type="text" inputmode="numeric" value="1" aria-label="Amount">
+            <button type="button" id="aCustomPlus" aria-label="More">+</button>
+          </div>
+          <button class="primary" id="aCustomGive">Give</button>
+        </div>
+        <div id="aCustomMsg" class="acustom-msg"></div>
+      </div>
       <div id="aRules"></div>
       <div class="log">
         <div class="ltitle">Recent activity</div>
@@ -4011,8 +4034,28 @@ function openAward(idx) {
     });
   });
 
+  // Reset the custom "any reason" fields for this employee.
+  $("aCustomReason").value = "";
+  $("aCustomAmt").value = "1";
+  $("aCustomMsg").textContent = "";
+
   renderAwardHistory(e.name);
   $("award").hidden = false;
+}
+
+// Give any number of bubbles for a freeform reason (not a preset rule).
+function giveCustomAward() {
+  if (session.role !== "manager" || state.activeIdx == null) return;
+  const msg = $("aCustomMsg");
+  const reason = ($("aCustomReason").value || "").trim();
+  const amt = parseInt(String($("aCustomAmt").value || "").replace(/[^0-9\-]/g, ""), 10);
+  if (!reason) { if (msg) msg.textContent = "Enter a reason."; try { $("aCustomReason").focus(); } catch (_) {} return; }
+  if (!Number.isFinite(amt) || amt === 0) { if (msg) msg.textContent = "Enter an amount (not zero)."; try { $("aCustomAmt").focus(); } catch (_) {} return; }
+  if (msg) msg.textContent = "";
+  applyAward(state.activeIdx, reason, amt);   // reason becomes the metric; shows in history/activity
+  $("aCustomReason").value = "";
+  $("aCustomAmt").value = "1";
+  try { $("aCustomReason").focus(); } catch (_) {}
 }
 
 // Render rule buttons grouped by category into a target element; calls
@@ -4905,6 +4948,11 @@ $("lblPrCancel").addEventListener("click", cancelEditPrinter);
 $("lblSrcNow").addEventListener("click", refreshPartsNow);
 
 $("aClose").addEventListener("click", () => { $("award").hidden = true; });
+$("aCustomGive").addEventListener("click", giveCustomAward);
+$("aCustomMinus").addEventListener("click", () => { $("aCustomAmt").value = ((parseInt($("aCustomAmt").value, 10) || 0) - 1); });
+$("aCustomPlus").addEventListener("click", () => { $("aCustomAmt").value = ((parseInt($("aCustomAmt").value, 10) || 0) + 1); });
+$("aCustomReason").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); giveCustomAward(); } });
+$("aCustomAmt").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); giveCustomAward(); } });
 
 $("redeemConfirm").addEventListener("click", confirmRedeem);
 $("redeemCancel").addEventListener("click", () => { $("redeemModal").hidden = true; state.pendingRedeem = null; });
