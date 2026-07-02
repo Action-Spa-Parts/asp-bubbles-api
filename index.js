@@ -1968,7 +1968,7 @@ async function importPartDescriptions(body) {
 // The connector is a remote MCP server over SSE: GET ERP_MCP_URL streams events;
 // the first is an "endpoint" giving a POST URL for JSON-RPC; responses arrive
 // back on the SSE stream. Auth = the ?key in the URL (set as a Railway env var).
-const ERP_ITEM_QUERY = process.env.ERP_ITEM_QUERY || 'FOR EACH item WHERE company_it = "ASPL" AND item <> ""';
+const ERP_ITEM_QUERY = process.env.ERP_ITEM_QUERY || 'FOR EACH item NO-LOCK WHERE company_it = "ASPL" AND item <> ""';
 
 async function withErpSession(fn) {
   const sseUrl = process.env.ERP_MCP_URL;
