@@ -2054,12 +2054,6 @@ function rejoinDescr(descr) {
   return out.trim();
 }
 
-// One small single-page read — for ad-hoc look-ups like order lines.
-async function erpReadRecords(query, columns, take) {
-  return withErpSession(async (rpc) =>
-    erpRecordsFrom(await rpc('tools/call', { name: 'dq_read', arguments: { query, columns, skip: 0, take: take || 100 } })));
-}
-
 // Full paginated item pull for the weekly parts-description sync.
 async function erpFetchItems(query, columns) {
   return withErpSession(async (rpc) => {
@@ -2076,73 +2070,6 @@ async function erpFetchItems(query, columns) {
     }
     return items;
   });
-}
-
-// ----- Order labels: scan an order → a label per line item -----
-// ERP-ONE stores OPEN orders with a NEGATIVE order number and invoiced ones
-// positive. A picker scans/keys the order number (any non-digits are stripped);
-// we try the open (negative) form first, then the invoiced (positive) form.
-async function fetchOrderLines(orderInput) {
-  // Pick tickets show the base order number, often with a ship-group/release
-  // suffix ("1293640-0001") or a prefix — take the FIRST run of digits.
-  const m = String(orderInput == null ? '' : orderInput).match(/\d+/);
-  if (!m) return { error: 'Enter or scan an order number.' };
-  const n = parseInt(m[0], 10);
-  if (!Number.isFinite(n) || n <= 0) return { error: 'That does not look like an order number.' };
-  // Current orders carry a positive order number, older back-orders negative —
-  // match either, but only OPEN lines (`opn`) so a long-closed order with the
-  // same number isn't picked up. ERP-ONE stores duplicate line rows (different
-  // `rec_seq`); de-dupe by line number so each line prints one sticker.
-  const recs = await erpReadRecords(
-    `FOR EACH oe_line NO-LOCK WHERE oe_line.company_oe = 'ASPL' AND (oe_line.order = ${n} OR oe_line.order = ${-n}) AND oe_line.opn = YES AND oe_line.item <> ''`,
-    'order,line,item,descr,location,q_ord', 400);
-  const byLine = new Map();
-  for (const r of recs) {
-    const ln = Number(r.line) || 0;
-    if (byLine.has(ln)) continue;   // first row per line wins (drops rec_seq duplicates)
-    const item = String(r.item || '').trim();
-    if (!item) continue;
-    byLine.set(ln, { line: ln, item, descr: rejoinDescr(r.descr), qty: Number(r.q_ord) || 0, location: String(r.location || '').trim() });
-  }
-  const lines = Array.from(byLine.values()).sort((a, b) => a.line - b.line);
-  return { order: n, lines };
-}
-
-async function getOrderLines(who, body) {
-  if (!who) return { error: 'Please sign in.' };
-  if (!process.env.ERP_MCP_URL) return { error: 'Order lookup is not set up (ERP connection missing).' };
-  let res;
-  try { res = await fetchOrderLines(body && body.order); }
-  catch (e) { return { error: (e && e.message) ? e.message : 'Order lookup failed.' }; }
-  if (res.error) return res;
-  if (!res.lines.length) return { order: res.order, found: false, lines: [] };
-  let customer = '';
-  try {
-    const h = await erpReadRecords(`FOR EACH oe_head NO-LOCK WHERE oe_head.company_oe = 'ASPL' AND (oe_head.order = ${res.order} OR oe_head.order = ${-res.order}) AND oe_head.opn = YES`, 'order,name', 1);
-    if (h.length) customer = String(h[0].name || '').trim();
-  } catch (_) { /* customer name is a nice-to-have */ }
-  return { order: res.order, found: true, customer, lines: res.lines };
-}
-
-async function printOrderLabels(who, body) {
-  if (!who) return { error: 'Please sign in.' };
-  if (!process.env.ERP_MCP_URL) return { error: 'Order lookup is not set up (ERP connection missing).' };
-  let res;
-  try { res = await fetchOrderLines(body && body.order); }
-  catch (e) { return { error: (e && e.message) ? e.message : 'Order lookup failed.' }; }
-  if (res.error) return res;
-  if (!res.lines.length) return { error: 'No line items found for order ' + res.order + '.' };
-  const batchId = ('ord' + res.order + '-' + Date.now()).slice(0, 40);
-  let printed = 0, failed = 0, lastError = '', via = '';
-  for (const ln of res.lines) {
-    const r = await enqueuePrint(who, { code: ln.item, qty: 1, desc: ln.descr, printerId: body && body.printerId, batchId });
-    if (r && r.ok) { printed++; via = r.via || via; }
-    else {
-      failed++; lastError = (r && r.error) || 'print failed';
-      if (/limit/i.test(lastError)) break;   // daily cloud cap hit — stop and report partial
-    }
-  }
-  return { order: res.order, requested: res.lines.length, printed, failed, lastError, via, bridgeOnline: await bridgeOnline() };
 }
 
 // Pull the full item list from the ERP and replace the description set.
@@ -2885,8 +2812,6 @@ app.post('/', async (req, res) => {
         case 'getEomLog':    out = await getEomLog(who); break;
         // ----- Label Printer -----
         case 'enqueuePrint':   out = await enqueuePrint(who, body); break;
-        case 'getOrderLines':    out = await getOrderLines(who, body); break;
-        case 'printOrderLabels': out = await printOrderLabels(who, body); break;
         case 'getPrintStatus': out = await getPrintStatus(who); break;
         case 'getCloudSettings': out = await getCloudSettings(who); break;
         case 'setCloudSettings': out = await setCloudSettings(who, body); break;
