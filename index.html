@@ -4136,7 +4136,7 @@ async function applyAward(idx, metric, delta) {
   e.balance += delta;
   e.recent = true;
   state.log.unshift({ name: e.name, metric, delta, ts: new Date() });
-  const histEntry = { Timestamp: new Date().toISOString(), Name: e.name, Metric: metric, Amount: delta };
+  const histEntry = { Timestamp: new Date().toISOString(), Name: e.name, Metric: metric, Amount: delta, By: session.name };
   state.allAwards.unshift(histEntry);
   $("aBal").textContent = e.balance.toLocaleString();
   renderSummary();
@@ -4167,6 +4167,10 @@ async function applyAward(idx, metric, delta) {
     return;
   }
 
+  // Reconcile so the new entry gets its real server id + "by" — this is what
+  // enables the Delete button and shows who gave it in All Activity. If the
+  // award modal is still open, refresh its history too.
+  fetchData().then(() => { if (!$("award").hidden && state.activeIdx != null) renderAwardHistory(e.name); });
   setTimeout(() => { e.recent = false; renderList(); }, 1500);
 }
 
