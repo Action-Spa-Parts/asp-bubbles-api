@@ -612,7 +612,7 @@
   .res-flabel input, .res-flabel textarea { font:inherit; font-weight:400; color:inherit; width:100%; min-width:0; padding:9px 11px; border:1px solid var(--border); border-radius:9px; background:var(--surface); box-sizing:border-box; }
   .res-flabel input:focus, .res-flabel textarea:focus { outline:none; border-color:var(--accent); }
   .res-flabel textarea { resize:vertical; min-height:62px; }
-  .res-ficon { max-width:96px; text-align:center; font-size:20px; }
+  .res-ico-img { width:30px; height:30px; object-fit:contain; display:block; }
   .res-fopt { font-weight:400; color:var(--muted); opacity:.85; }
   .res-ferr { background:var(--danger-soft); color:var(--danger); border-radius:8px; padding:8px 11px; font-size:13px; }
   .res-factions { display:flex; align-items:center; gap:8px; margin-top:2px; }
@@ -1436,8 +1436,8 @@
         <label class="res-flabel">Short description <span class="res-fopt">(optional)</span>
           <textarea id="resFDesc" rows="3" maxlength="500" placeholder="What is this link for?"></textarea>
         </label>
-        <label class="res-flabel">Icon <span class="res-fopt">(optional emoji)</span>
-          <input type="text" id="resFIcon" class="res-ficon" placeholder="🔗" maxlength="12" autocomplete="off">
+        <label class="res-flabel">Icon <span class="res-fopt">(emoji, or paste an image URL)</span>
+          <input type="text" id="resFIcon" placeholder="🔗 or https://…/logo.png" maxlength="300" autocomplete="off">
         </label>
         <div class="res-ferr" id="resFErr" hidden></div>
         <div class="res-factions">
@@ -4246,6 +4246,17 @@ function escapeHtml(s) {
 }
 
 /* ---------- Imported Resources (curated links) ---------- */
+// An icon is either a short emoji or an image (served path / URL / data URI).
+function resIsImageIcon(icon) {
+  return /^(data:image\/|https?:\/\/|\/)/i.test(icon) || /\.(png|jpe?g|webp|gif|svg)(\?.*)?$/i.test(icon);
+}
+function resIcoHtml(icon) {
+  icon = icon || "🔗";
+  return resIsImageIcon(icon)
+    ? `<span class="res-ico"><img class="res-ico-img" src="${escapeHtml(icon)}" alt=""></span>`
+    : `<span class="res-ico">${escapeHtml(icon)}</span>`;
+}
+
 async function loadResources() {
   const mgr = session.role === "manager";
   $("resAddBtn").hidden = !mgr;
@@ -4284,7 +4295,7 @@ function renderResources() {
       html += `<div class="res-item">
         <a class="res-card" href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer">
           <span class="res-head">
-            <span class="res-ico">${escapeHtml(r.icon || "🔗")}</span>
+            ${resIcoHtml(r.icon)}
             <span class="res-name">${escapeHtml(r.name)}</span>
             <span class="res-open" aria-hidden="true">↗</span>
           </span>${desc}

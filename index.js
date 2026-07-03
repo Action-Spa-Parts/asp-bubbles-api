@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '92';
+const APP_VERSION = '93';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -2350,6 +2350,7 @@ const STATIC_FILES = [
   'index.html', 'tv.html', 'sw.js', 'manifest.json',
   'logo.svg', 'bubbles-icon.png',
   'icon-192.png', 'icon-512.png', 'apple-touch-icon.png',
+  'res-picking.png',
   'jsbarcode.min.js',
 ];
 
@@ -2547,13 +2548,18 @@ function cleanResource(r) {
   const url = normalizeUrl(r.url);
   if (!name) return { error: 'Give the link a name.' };
   if (!url) return { error: 'Enter a web address (URL).' };
+  // Icon is either a short emoji OR an image reference (a served path like
+  // "res-picking.png", an https URL, or a data:image URI) — allow the longer form.
+  let icon = String(r.icon || '').trim();
+  const isImg = /^(data:image\/|https?:\/\/|\/)/i.test(icon) || /\.(png|jpe?g|webp|gif|svg)(\?.*)?$/i.test(icon);
+  icon = icon ? (isImg ? icon.slice(0, 20000) : icon.slice(0, 16)) : '🔗';
   return {
     resource: {
       name,
       url,
       category: (String(r.category || '').trim() || 'Links').slice(0, 80),
       description: String(r.description || '').trim().slice(0, 500),
-      icon: (String(r.icon || '').trim() || '🔗').slice(0, 12),
+      icon,
     },
   };
 }

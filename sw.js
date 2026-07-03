@@ -2,7 +2,7 @@
 // the app opens instantly and survives a flaky connection. API data is always
 // fetched live (never cached).
 
-const CACHE = "action-spa-warehouse-v92";
+const CACHE = "action-spa-warehouse-v93";
 const SHELL = [
   "./",
   "./index.html",
@@ -12,6 +12,7 @@ const SHELL = [
   "./icon-192.png",
   "./icon-512.png",
   "./apple-touch-icon.png",
+  "./res-picking.png",
   "./jsbarcode.min.js",
 ];
 
