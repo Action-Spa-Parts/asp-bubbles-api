@@ -805,6 +805,9 @@
   .cl-meta { color:var(--muted); font-size:13px; margin-bottom:14px; }
   .cl-cat { margin-bottom:16px; }
   .cl-cat .ctitle { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--accent); font-weight:700; margin-bottom:8px; }
+  .cl-delrun-row { margin-top:10px; }
+  .cl-delrun { color:var(--danger); font-size:13px; }
+  .cl-delrun:hover { border-color:var(--danger); }
   .cl-item {
     display:flex; align-items:flex-start; gap:12px;
     background:var(--surface); border:1px solid var(--border); border-radius:10px;
@@ -3894,6 +3897,7 @@ function runCardsHtml(runs, today, opts) {
         </div>
         <div class="cl-runbody" id="clrun-${r.id}" ${open ? "" : "hidden"}>
           ${interactive && r.status !== "completed" ? reassignHtml(r) : ""}
+          ${interactive && r.status !== "completed" && today && r.run_date < today ? `<div class="cl-delrun-row"><button class="ghost cl-delrun" data-del-run="${r.id}" data-date="${escapeAttr(r.run_date)}">🗑 Delete this run</button></div>` : ""}
           ${r.items.length ? groupByCategory(r.items).map(g => `
             <div class="cl-acat" style="margin-top:10px;">${escapeHtml(g.category)}</div>
             ${g.items.map(it => `
@@ -3927,6 +3931,12 @@ function wireRunCards(body) {
   body.querySelectorAll("[data-unflag]").forEach(b => b.addEventListener("click", (e) => {
     e.stopPropagation();
     adminChecklistAction("unflagChecklistItem", { itemId: parseInt(b.dataset.unflag, 10) });
+  }));
+  body.querySelectorAll("[data-del-run]").forEach(b => b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const id = parseInt(b.dataset.delRun, 10);
+    askConfirm(`Delete the incomplete checklist from ${fmtRunDate(b.dataset.date)}? This can't be undone.`,
+      () => adminChecklistAction("deleteChecklistRun", { runId: id }), { okText: "Delete" });
   }));
   body.querySelectorAll("[data-reassign-run]").forEach(sel => sel.addEventListener("change", (e) => {
     e.stopPropagation();

@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '94';
+const APP_VERSION = '95';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1737,6 +1737,18 @@ async function resetChecklist(who) {
   return { ok: true, assignee: run ? await nameForEmpId(run.employee_id) : null };
 }
 
+// Delete one checklist run by id (e.g. an old "Not completed" day or a
+// pre-launch artifact). Its items cascade-delete. Manager only — the UI only
+// offers this on past, not-completed runs, but the id is validated here too.
+async function deleteChecklistRun(who, runId) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const id = cleanInt(runId);
+  if (id === null) return { error: 'Bad run id' };
+  const { rowCount } = await pool.query('DELETE FROM checklist_runs WHERE id = $1', [id]);
+  if (!rowCount) return { error: 'Run not found.' };
+  return { ok: true };
+}
+
 // Re-randomize the upcoming order WITHOUT changing who already did it (keeps
 // today's assignee). Anyone who did the checklist in the last 3 days is pushed to
 // the back so they aren't scheduled within 3 days. Manager only.
@@ -3019,6 +3031,7 @@ app.post('/', async (req, res) => {
         case 'resetChecklist':       out = await resetChecklist(who); break;
         case 'reshuffleChecklist':   out = await reshuffleChecklist(who); break;
         case 'reassignChecklistRun': out = await reassignChecklistRun(who, body); break;
+        case 'deleteChecklistRun':   out = await deleteChecklistRun(who, body.runId); break;
         // ----- Box Counter -----
         case 'getBoxSizes':   out = await getBoxSizes(who); break;
         case 'getBoxActivity': out = await getBoxActivity(who); break;
