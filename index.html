@@ -778,6 +778,19 @@
   .eom-brow .v { flex:1; }
   .eom-arrow { color:var(--muted); }
   .eom-brow strong { color:var(--accent); }
+  /* EOM manager tools (⚙ Manage → Emp. of Month) */
+  .eom-adm-winner { background:var(--accent-soft); border:1px solid var(--border); border-radius:10px; padding:12px 14px; margin-top:10px; display:flex; flex-direction:column; gap:9px; }
+  .eom-adm-wcur { font-size:15px; }
+  .eom-adm-pick { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .eom-adm-ballots { display:flex; flex-direction:column; gap:2px; }
+  .eom-adm-brow { display:flex; align-items:center; gap:9px; padding:7px 0; border-bottom:1px dashed var(--border); }
+  .eom-adm-brow:last-child { border-bottom:none; }
+  .eom-adm-voter { min-width:104px; font-weight:600; font-size:14px; }
+  .eom-adm-brow .eom-adm-choice { flex:1; min-width:0; }
+  .eom-adm-del { flex:0 0 auto; border:1px solid var(--border); background:var(--surface); border-radius:8px; padding:6px 10px; cursor:pointer; font-size:14px; line-height:1; }
+  .eom-adm-del:hover { border-color:var(--danger); }
+  .eom-adm-add { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+  .eom-adm-mini { padding:7px 13px; }
 
   /* End-of-day checklist */
   .navbtn.alert { color: var(--danger); }
@@ -1484,6 +1497,7 @@
         <button class="atab" data-atab="checklist">Checklist</button>
         <button class="atab" data-atab="label">Label Printer</button>
         <button class="atab" data-atab="notify">Notifications</button>
+        <button class="atab" data-atab="eom">Emp. of Month</button>
       </div>
       <div id="adminError" style="display:none; background:var(--danger-soft); border:1px solid #fecaca; color:#7f1d1d; border-radius:8px; padding:8px 12px; font-size:13px; margin-bottom:12px;"></div>
 
@@ -1642,6 +1656,9 @@
         </div>
         <div id="mNotifyDevices" class="muted" style="font-size:13px; margin-top:14px;"></div>
       </div>
+
+      <!-- Employee of the Month — edit votes + pick a tie-breaking winner (JS-rendered) -->
+      <div class="asec" id="asec-eom" hidden></div>
     </div>
   </div>
 </div>
@@ -3565,6 +3582,115 @@ function renderEomLog() {
   el.innerHTML = html;
 }
 
+/* ---------- Employee of the Month — manager tools (⚙ Manage → Emp. of Month) ---------- */
+async function loadEomAdmin(period) {
+  const box = $("asec-eom");
+  box.innerHTML = `<div class="muted" style="font-size:13px;">Loading…</div>`;
+  try {
+    const data = await apiCall("getEomAdmin", { pin: session.pin, period: period });
+    if (data.error) { box.innerHTML = `<div class="cl-meta">${escapeHtml(data.error)}</div>`; return; }
+    state.eomAdmin = data;
+    renderEomAdmin();
+  } catch (err) {
+    box.innerHTML = `<div class="cl-meta">Couldn't load (${escapeHtml(err && err.message ? err.message : String(err))}).</div>`;
+  }
+}
+
+function renderEomAdmin() {
+  const d = state.eomAdmin; if (!d) return;
+  const box = $("asec-eom");
+  const cands = d.candidates || [];
+  const w = d.winner;
+  let html = "";
+  // Month selector
+  html += `<div class="field"><label>Month</label><select id="eomAdminPeriod">` +
+    d.periods.map(p => `<option value="${escapeAttr(p.period)}"${p.period === d.period ? " selected" : ""}>${escapeHtml(p.label)}</option>`).join("") +
+    `</select></div>`;
+
+  // Winner / tie-break
+  html += `<div class="eom-adm-winner">`;
+  if (!d.tally.length) {
+    html += `<div class="cl-meta">No votes yet for ${escapeHtml(d.label)}.</div>`;
+  } else {
+    if (w && w.tied && !d.overrideName) {
+      html += `<div class="cl-banner">It's a tie for 1st — pick the winner below.</div>`;
+    }
+    const tag = d.overrideName
+      ? `<span class="badge">picked by manager</span>`
+      : (w && w.tied ? `<span class="badge off">tie</span>` : `<span class="muted" style="font-weight:400;">most votes</span>`);
+    html += `<div class="eom-adm-wcur">🏆 Winner: <strong>${escapeHtml(w ? w.name : "—")}</strong> ${tag}</div>`;
+    html += `<div class="eom-adm-pick"><label class="muted" style="font-size:12px;">Set winner:</label>
+      <select id="eomWinnerSel"><option value="">— use vote count —</option>` +
+      d.tally.map(t => `<option value="${escapeAttr(t.name)}"${d.overrideName === t.name ? " selected" : ""}>${escapeHtml(t.name)} (${t.votes})</option>`).join("") +
+      `</select><button class="ghost eom-adm-mini" id="eomWinnerSave">Save winner</button></div>`;
+  }
+  html += `</div>`;
+
+  // Standings
+  html += `<h2 class="section" style="margin-top:14px;">Standings</h2>` + eomRankHtml(d.tally);
+
+  // Votes (edit / remove)
+  html += `<h2 class="section" style="margin-top:16px;">Votes${d.votingOpen ? ` <span class="muted" style="font-weight:400; text-transform:none; letter-spacing:0;">(voting still open)</span>` : ""}</h2>`;
+  if (!d.ballots.length) {
+    html += `<div class="cl-meta">No votes yet.</div>`;
+  } else {
+    html += `<div class="eom-adm-ballots">` + d.ballots.map(b => {
+      const opts = cands.slice();
+      if (!opts.includes(b.choice)) opts.unshift(b.choice);   // keep current choice even if now inactive
+      return `<div class="eom-adm-brow">
+        <span class="eom-adm-voter">${escapeHtml(b.voter)}</span><span class="eom-arrow">→</span>
+        <select class="eom-adm-choice" data-voter="${escapeAttr(b.voter)}">` +
+          opts.map(n => `<option value="${escapeAttr(n)}"${n === b.choice ? " selected" : ""}>${escapeHtml(n)}</option>`).join("") +
+        `</select>
+        <button class="eom-adm-del" data-voter="${escapeAttr(b.voter)}" title="Remove this vote" aria-label="Remove vote">🗑</button>
+      </div>`;
+    }).join("") + `</div>`;
+  }
+
+  // Add a vote for someone who hasn't voted
+  if (d.nonVoters && d.nonVoters.length) {
+    html += `<div class="eom-adm-add">
+      <label class="muted" style="font-size:12px;">Add a vote:</label>
+      <select id="eomAddVoter"><option value="">Who's voting…</option>` +
+        d.nonVoters.map(n => `<option value="${escapeAttr(n)}">${escapeHtml(n)}</option>`).join("") + `</select>
+      <span class="eom-arrow">→</span>
+      <select id="eomAddChoice"><option value="">For…</option>` +
+        cands.map(n => `<option value="${escapeAttr(n)}">${escapeHtml(n)}</option>`).join("") + `</select>
+      <button class="ghost eom-adm-mini" id="eomAddBtn">Add</button>
+    </div>`;
+  }
+
+  box.innerHTML = html;
+  $("eomAdminPeriod").addEventListener("change", e => loadEomAdmin(e.target.value));
+  const ws = $("eomWinnerSave"); if (ws) ws.addEventListener("click", () => eomSetWinner($("eomWinnerSel").value));
+  box.querySelectorAll(".eom-adm-choice").forEach(s => s.addEventListener("change", () => eomEditVote(s.dataset.voter, s.value)));
+  box.querySelectorAll(".eom-adm-del").forEach(b => b.addEventListener("click", () => eomRemoveVote(b.dataset.voter)));
+  const ab = $("eomAddBtn"); if (ab) ab.addEventListener("click", eomAddVote);
+}
+
+async function eomAdminAction(action, params) {
+  adminError("");
+  try {
+    const res = await apiCall(action, Object.assign({ pin: session.pin }, params));
+    if (res.error) { adminError(res.error); return; }
+    state.eomAdmin = res;
+    renderEomAdmin();
+    fetchData();   // reflect the change on the EOM screen (winner, standings)
+  } catch (err) {
+    adminError("Error: " + (err && err.message ? err.message : err));
+  }
+}
+function eomEditVote(voter, choice) { eomAdminAction("setEomVote", { period: state.eomAdmin.period, voter: voter, choice: choice }); }
+function eomRemoveVote(voter) {
+  askConfirm(`Remove ${voter}'s vote?`, () => eomAdminAction("removeEomVote", { period: state.eomAdmin.period, voter: voter }), { okText: "Remove" });
+}
+function eomAddVote() {
+  const voter = $("eomAddVoter").value, choice = $("eomAddChoice").value;
+  if (!voter || !choice) { adminError("Pick who's voting and who it's for."); return; }
+  eomAdminAction("setEomVote", { period: state.eomAdmin.period, voter: voter, choice: choice });
+}
+function eomSetWinner(name) { eomAdminAction("setEomWinner", { period: state.eomAdmin.period, winner: name }); }
+
 // Highlight the Closing Checklist home tile (red border + pulse + "your turn"
 // badge) when it's this worker's turn and they haven't finished it yet.
 function updateChecklistNav() {
@@ -4671,12 +4797,13 @@ async function loadAdmin() {
 
 function switchAdminTab(tab) {
   state.admin.tab = tab;
-  ["rules", "rewards", "people", "admins", "checklist", "label", "notify"].forEach(t => { $("asec-" + t).hidden = (t !== tab); });
+  ["rules", "rewards", "people", "admins", "checklist", "label", "notify", "eom"].forEach(t => { $("asec-" + t).hidden = (t !== tab); });
   document.querySelectorAll(".atab").forEach(b => b.classList.toggle("active", b.dataset.atab === tab));
   adminError("");
   hideAdminForms();
   if (tab === "label") renderLabelAdmin();
   if (tab === "notify") renderNotifyAdmin();
+  if (tab === "eom") loadEomAdmin();
 }
 
 // Shared save path: posts the action, then refreshes both the admin lists and

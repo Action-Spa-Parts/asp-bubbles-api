@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '93';
+const APP_VERSION = '94';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -230,6 +230,17 @@ async function ensureSchema() {
       choice_name TEXT NOT NULL,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (period, voter_name)
+    )`);
+
+  // Manager-picked Employee-of-the-Month winner override — used to break a tie or
+  // correct a result. A row here means that name is THE winner for the period
+  // regardless of raw vote count; no row = winner is the top vote-getter.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS eom_winners (
+      period      TEXT PRIMARY KEY,
+      winner_name TEXT NOT NULL,
+      set_by      TEXT NOT NULL DEFAULT '',
+      ts          TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
 
   // Per-feature roster flags on employees. These let a manager take someone out
@@ -2642,6 +2653,26 @@ async function eomMeta() {
            awardPeriod: ymKey(ay, am), awardLabel: monthLabel(ay, am) };
 }
 
+// Resolve a period's winner from its tally + an optional manager override.
+// tied = two or more share the top vote count (so a manager should pick).
+function resolveEomWinner(tally, overrideName) {
+  if (!tally || !tally.length) {
+    return overrideName ? { name: overrideName, votes: 0, overridden: true, tied: false } : null;
+  }
+  const top = tally[0].votes;
+  const tied = tally.filter(t => t.votes === top).length > 1;
+  if (overrideName) {
+    const row = tally.find(t => t.name === overrideName);
+    return { name: overrideName, votes: row ? row.votes : 0, overridden: true, tied };
+  }
+  return { name: tally[0].name, votes: top, overridden: false, tied };
+}
+// All manager winner-overrides as a { period: winner_name } map.
+async function eomOverrides() {
+  const { rows } = await pool.query('SELECT period, winner_name FROM eom_winners');
+  const m = {}; rows.forEach(r => { m[r.period] = r.winner_name; }); return m;
+}
+
 async function getEom(who) {
   if (!who) return { error: 'Not authorized' };
   const meta = await eomMeta();
@@ -2655,14 +2686,20 @@ async function getEom(who) {
     'SELECT choice_name FROM eom_votes WHERE period = $1 AND voter_name = $2', [meta.awardPeriod, who.name]);
   const { rows: vc } = await pool.query(
     'SELECT COUNT(DISTINCT voter_name)::int AS n FROM eom_votes WHERE period = $1', [meta.awardPeriod]);
-  // Most-recent finished result (top vote-getter of the latest period that has votes).
-  const { rows: last } = await pool.query(
-    `SELECT period, choice_name AS name, COUNT(*)::int AS votes FROM eom_votes
-       GROUP BY period, choice_name ORDER BY period DESC, votes DESC, choice_name LIMIT 1`);
+  // Most-recent finished result (respecting a manager winner-override if set).
+  const { rows: lastP } = await pool.query('SELECT period FROM eom_votes ORDER BY period DESC LIMIT 1');
   let lastResult = null;
-  if (last.length) {
-    const [ly, lm] = last[0].period.split('-').map(Number);
-    lastResult = { period: last[0].period, label: `${MONTH_NAMES[lm - 1]} ${ly}`, name: last[0].name, votes: last[0].votes };
+  if (lastP.length) {
+    const lp = lastP[0].period;
+    const { rows: ltally } = await pool.query(
+      `SELECT choice_name AS name, COUNT(*)::int AS votes FROM eom_votes
+         WHERE period = $1 GROUP BY choice_name ORDER BY votes DESC, choice_name`, [lp]);
+    const { rows: ov } = await pool.query('SELECT winner_name FROM eom_winners WHERE period = $1', [lp]);
+    const w = resolveEomWinner(ltally, ov.length ? ov[0].winner_name : null);
+    if (w) {
+      const [ly, lm] = lp.split('-').map(Number);
+      lastResult = { period: lp, label: `${MONTH_NAMES[lm - 1]} ${ly}`, name: w.name, votes: w.votes };
+    }
   }
   return {
     ...meta,
@@ -2706,6 +2743,7 @@ async function getEomLog(who) {
   const isMgr = isManager(who);
   const openPeriod = meta.votingOpen ? meta.awardPeriod : null;
   const { rows: prows } = await pool.query('SELECT DISTINCT period FROM eom_votes ORDER BY period DESC');
+  const overrides = await eomOverrides();
   const periods = [];
   for (const pr of prows) {
     const p = pr.period;
@@ -2714,8 +2752,9 @@ async function getEomLog(who) {
       `SELECT choice_name AS name, COUNT(*)::int AS votes FROM eom_votes
          WHERE period = $1 GROUP BY choice_name ORDER BY votes DESC, choice_name`, [p]);
     const [y, m] = p.split('-').map(Number);
+    const w = resolveEomWinner(tally, overrides[p]);
     const entry = { period: p, label: monthLabel(y, m),
-      winner: tally.length ? { name: tally[0].name, votes: tally[0].votes } : null, tally };
+      winner: w ? { name: w.name, votes: w.votes, overridden: w.overridden, tied: w.tied } : null, tally };
     if (isMgr) {
       const { rows: ballots } = await pool.query(
         'SELECT voter_name AS voter, choice_name AS choice FROM eom_votes WHERE period = $1 ORDER BY voter_name', [p]);
@@ -2724,6 +2763,82 @@ async function getEomLog(who) {
     periods.push(entry);
   }
   return { periods, isManager: isMgr };
+}
+
+// ---- Manager tools: edit votes + pick a tie-breaking winner ----
+async function getEomAdmin(who, period) {
+  if (!isManager(who)) return { error: 'Only a manager can manage votes.' };
+  const meta = await eomMeta();
+  const { rows: prows } = await pool.query('SELECT DISTINCT period FROM eom_votes ORDER BY period DESC');
+  let periodSet = prows.map(r => r.period);
+  if (!periodSet.includes(meta.awardPeriod)) periodSet.push(meta.awardPeriod);   // current month even if no votes yet
+  periodSet = Array.from(new Set(periodSet)).sort().reverse();
+  const sel = (period && periodSet.includes(period)) ? period
+    : (periodSet.includes(meta.awardPeriod) ? meta.awardPeriod : periodSet[0]);
+  const periods = periodSet.map(p => { const [y, m] = p.split('-').map(Number); return { period: p, label: monthLabel(y, m) }; });
+  const { rows: emps } = await pool.query(
+    'SELECT name FROM employees WHERE active = true AND voting_eligible = true ORDER BY name');
+  const candidates = emps.map(e => e.name);
+  const { rows: tally } = await pool.query(
+    `SELECT choice_name AS name, COUNT(*)::int AS votes FROM eom_votes
+       WHERE period = $1 GROUP BY choice_name ORDER BY votes DESC, choice_name`, [sel]);
+  const { rows: ballots } = await pool.query(
+    'SELECT voter_name AS voter, choice_name AS choice FROM eom_votes WHERE period = $1 ORDER BY voter_name', [sel]);
+  const { rows: ov } = await pool.query('SELECT winner_name FROM eom_winners WHERE period = $1', [sel]);
+  const overrideName = ov.length ? ov[0].winner_name : null;
+  const winner = resolveEomWinner(tally, overrideName);
+  const voters = ballots.map(b => b.voter);
+  const nonVoters = candidates.filter(n => !voters.includes(n));
+  const [sy, sm] = sel.split('-').map(Number);
+  return { period: sel, label: monthLabel(sy, sm), periods, candidates, tally, ballots,
+           winner, overrideName, nonVoters, votingOpen: meta.votingOpen && sel === meta.awardPeriod };
+}
+
+// Add or change a vote (upsert on period+voter). Manager only.
+async function setEomVote(who, body) {
+  if (!isManager(who)) return { error: 'Only a manager can edit votes.' };
+  const period = String((body && body.period) || '').trim();
+  const voter = String((body && body.voter) || '').trim().slice(0, 120);
+  const choice = String((body && body.choice) || '').trim().slice(0, 120);
+  if (!/^\d{4}-\d{2}$/.test(period)) return { error: 'Bad period.' };
+  if (!voter) return { error: 'Pick who is voting.' };
+  if (!choice) return { error: 'Pick who the vote is for.' };
+  if (voter === choice) return { error: "A person can't vote for themselves." };
+  await pool.query(
+    `INSERT INTO eom_votes (period, voter_name, choice_name) VALUES ($1, $2, $3)
+       ON CONFLICT (period, voter_name) DO UPDATE SET choice_name = EXCLUDED.choice_name`,
+    [period, voter, choice]);
+  return await getEomAdmin(who, period);
+}
+
+async function removeEomVote(who, body) {
+  if (!isManager(who)) return { error: 'Only a manager can remove votes.' };
+  const period = String((body && body.period) || '').trim();
+  const voter = String((body && body.voter) || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(period) || !voter) return { error: 'Bad request.' };
+  await pool.query('DELETE FROM eom_votes WHERE period = $1 AND voter_name = $2', [period, voter]);
+  return await getEomAdmin(who, period);
+}
+
+// Pick the winner (tie-break / correction). Empty winner clears the override so
+// the winner reverts to the top vote-getter.
+async function setEomWinner(who, body) {
+  if (!isManager(who)) return { error: 'Only a manager can pick the winner.' };
+  const period = String((body && body.period) || '').trim();
+  const winner = String((body && body.winner) || '').trim().slice(0, 120);
+  if (!/^\d{4}-\d{2}$/.test(period)) return { error: 'Bad period.' };
+  if (!winner) {
+    await pool.query('DELETE FROM eom_winners WHERE period = $1', [period]);
+  } else {
+    const { rows: ok } = await pool.query(
+      'SELECT 1 FROM eom_votes WHERE period = $1 AND choice_name = $2 LIMIT 1', [period, winner]);
+    if (!ok.length) return { error: 'That person got no votes this month.' };
+    await pool.query(
+      `INSERT INTO eom_winners (period, winner_name, set_by) VALUES ($1, $2, $3)
+         ON CONFLICT (period) DO UPDATE SET winner_name = EXCLUDED.winner_name, set_by = EXCLUDED.set_by, ts = now()`,
+      [period, winner, who.name || '']);
+  }
+  return await getEomAdmin(who, period);
 }
 
 // =================================================================
@@ -2920,6 +3035,10 @@ app.post('/', async (req, res) => {
         case 'getEom':       out = await getEom(who); break;
         case 'castEomVote':  out = await castEomVote(who, body.choice); break;
         case 'getEomLog':    out = await getEomLog(who); break;
+        case 'getEomAdmin':  out = await getEomAdmin(who, body.period); break;
+        case 'setEomVote':   out = await setEomVote(who, body); break;
+        case 'removeEomVote': out = await removeEomVote(who, body); break;
+        case 'setEomWinner': out = await setEomWinner(who, body); break;
         // ----- Label Printer -----
         case 'enqueuePrint':   out = await enqueuePrint(who, body); break;
         case 'getPrintStatus': out = await getPrintStatus(who); break;
