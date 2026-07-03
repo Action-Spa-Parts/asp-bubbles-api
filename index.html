@@ -602,6 +602,21 @@
   .res-name { font-size:16px; font-weight:700; flex:1; min-width:0; }
   .res-open { color:var(--muted); font-size:20px; flex-shrink:0; line-height:1; }
   .res-desc { margin:12px 0 0; font-size:13.5px; line-height:1.5; color:var(--muted); }
+  .res-item { display:flex; flex-direction:column; align-items:flex-start; gap:2px; }
+  .res-item .res-card { width:100%; }
+  .res-edit { background:none; border:none; padding:3px 4px; margin:0 0 4px; color:var(--accent); font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
+  .res-edit:hover { text-decoration:underline; }
+  .res-addbtn { width:100%; max-width:520px; margin:6px auto 0; }
+  .res-form { display:flex; flex-direction:column; gap:13px; }
+  .res-flabel { display:flex; flex-direction:column; gap:5px; font-size:13px; font-weight:600; color:var(--muted); }
+  .res-flabel input, .res-flabel textarea { font:inherit; font-weight:400; color:inherit; width:100%; min-width:0; padding:9px 11px; border:1px solid var(--border); border-radius:9px; background:var(--surface); box-sizing:border-box; }
+  .res-flabel input:focus, .res-flabel textarea:focus { outline:none; border-color:var(--accent); }
+  .res-flabel textarea { resize:vertical; min-height:62px; }
+  .res-ficon { max-width:96px; text-align:center; font-size:20px; }
+  .res-fopt { font-weight:400; color:var(--muted); opacity:.85; }
+  .res-ferr { background:var(--danger-soft); color:var(--danger); border-radius:8px; padding:8px 11px; font-size:13px; }
+  .res-factions { display:flex; align-items:center; gap:8px; margin-top:2px; }
+  .ghost.danger { color:var(--danger); }
 
   /* Label Printer */
   #labelScreen { padding-bottom:90px; }
@@ -1171,15 +1186,8 @@
   <!-- ===== Imported Resources (links) ===== -->
   <div id="resourcesScreen" hidden>
     <div class="res-wrap">
-      <div class="res-cat">Compliance &amp; Training</div>
-      <a class="res-card" href="https://actioncomply-production.up.railway.app/login" target="_blank" rel="noopener noreferrer">
-        <span class="res-head">
-          <span class="res-ico">🛡️</span>
-          <span class="res-name">ActionComply</span>
-          <span class="res-open" aria-hidden="true">↗</span>
-        </span>
-        <p class="res-desc">State-mandated and OSHA training, certificates of completion, and policy acknowledgements — kept current for every member of the team.</p>
-      </a>
+      <div id="resList"><div class="empty"><div>Loading…</div></div></div>
+      <button class="ghost res-addbtn" id="resAddBtn" hidden>+ Add link</button>
     </div>
   </div>
 
@@ -1403,6 +1411,41 @@
       <div id="teamPick">
         <p class="muted" style="margin:0 0 12px; font-size:13px;">These are your team-wide rules. Tap one to award it to <strong>everyone</strong> at once.</p>
         <div id="teamRules"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="resourceModal" hidden>
+  <div class="overlay-card narrow">
+    <div class="dhead">
+      <div class="dname" id="resModalTitle">Add link</div>
+      <button class="dclose" id="resModalClose" aria-label="Close">&times;</button>
+    </div>
+    <div class="dbody">
+      <div class="res-form">
+        <label class="res-flabel">Name
+          <input type="text" id="resFName" placeholder="e.g. ActionComply" maxlength="120" autocomplete="off">
+        </label>
+        <label class="res-flabel">Web address (URL)
+          <input type="text" id="resFUrl" placeholder="https://…" maxlength="500" autocomplete="off">
+        </label>
+        <label class="res-flabel">Category <span class="res-fopt">(links group under this heading)</span>
+          <input type="text" id="resFCat" placeholder="e.g. Compliance &amp; Training" maxlength="80" autocomplete="off">
+        </label>
+        <label class="res-flabel">Short description <span class="res-fopt">(optional)</span>
+          <textarea id="resFDesc" rows="3" maxlength="500" placeholder="What is this link for?"></textarea>
+        </label>
+        <label class="res-flabel">Icon <span class="res-fopt">(optional emoji)</span>
+          <input type="text" id="resFIcon" class="res-ficon" placeholder="🔗" maxlength="12" autocomplete="off">
+        </label>
+        <div class="res-ferr" id="resFErr" hidden></div>
+        <div class="res-factions">
+          <button class="ghost danger" id="resDeleteBtn" hidden>Delete</button>
+          <span style="flex:1"></span>
+          <button class="ghost" id="resCancelBtn">Cancel</button>
+          <button class="primary" id="resSaveBtn">Save link</button>
+        </div>
       </div>
     </div>
   </div>
@@ -2338,6 +2381,7 @@ function showScreen(name) {
   if (name === "boxcounter") { switchBoxTab("count"); loadBoxSizes(); }
   if (name === "eom") { switchEomTab("vote"); loadEom(); }
   if (name === "label") initLabelPrinter();
+  if (name === "resources") loadResources();
   if (name === "home") updateNotifyUI();
 }
 
@@ -4200,6 +4244,115 @@ async function undoAward(name, metric, amount) {
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+
+/* ---------- Imported Resources (curated links) ---------- */
+async function loadResources() {
+  const mgr = session.role === "manager";
+  $("resAddBtn").hidden = !mgr;
+  $("resList").innerHTML = `<div class="empty"><div>Loading…</div></div>`;
+  try {
+    const data = await apiCall("getResources", { pin: session.pin });
+    if (data.error) { $("resList").innerHTML = `<div class="empty">${escapeHtml(data.error)}</div>`; return; }
+    state.resources = data.resources || [];
+    renderResources();
+  } catch (err) {
+    $("resList").innerHTML = `<div class="empty">Couldn't load (${escapeHtml(err && err.message ? err.message : String(err))}).</div>`;
+  }
+}
+
+function renderResources() {
+  const list = state.resources || [];
+  const mgr = session.role === "manager";
+  const box = $("resList");
+  if (!list.length) {
+    box.innerHTML = `<div class="empty"><h3>No links yet</h3><div>${mgr ? "Tap “+ Add link” below to add one." : "Check back soon."}</div></div>`;
+    return;
+  }
+  // Group by category, preserving the order categories first appear.
+  const order = [], byCat = {};
+  list.forEach(r => {
+    const cat = (r.category || "Links").trim() || "Links";
+    if (!byCat[cat]) { byCat[cat] = []; order.push(cat); }
+    byCat[cat].push(r);
+  });
+  let html = "";
+  order.forEach(cat => {
+    html += `<div class="res-cat">${escapeHtml(cat)}</div>`;
+    byCat[cat].forEach(r => {
+      const desc = r.description ? `<p class="res-desc">${escapeHtml(r.description)}</p>` : "";
+      const edit = mgr ? `<button type="button" class="res-edit" data-res-edit="${r.id}">✎ Edit</button>` : "";
+      html += `<div class="res-item">
+        <a class="res-card" href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer">
+          <span class="res-head">
+            <span class="res-ico">${escapeHtml(r.icon || "🔗")}</span>
+            <span class="res-name">${escapeHtml(r.name)}</span>
+            <span class="res-open" aria-hidden="true">↗</span>
+          </span>${desc}
+        </a>${edit}
+      </div>`;
+    });
+  });
+  box.innerHTML = html;
+  box.querySelectorAll("[data-res-edit]").forEach(b =>
+    b.addEventListener("click", () => openResourceModal(parseInt(b.dataset.resEdit, 10))));
+}
+
+function openResourceModal(id) {
+  const editing = Number.isFinite(id);
+  const r = editing ? (state.resources || []).find(x => x.id === id) : null;
+  state.resEditId = editing ? id : null;
+  $("resModalTitle").textContent = editing ? "Edit link" : "Add link";
+  $("resFName").value = r ? r.name : "";
+  $("resFUrl").value = r ? r.url : "";
+  $("resFCat").value = r ? (r.category || "") : "";
+  $("resFDesc").value = r ? (r.description || "") : "";
+  $("resFIcon").value = r ? (r.icon || "") : "";
+  $("resFErr").hidden = true; $("resFErr").textContent = "";
+  $("resDeleteBtn").hidden = !editing;
+  $("resSaveBtn").disabled = false; $("resDeleteBtn").disabled = false;
+  $("resourceModal").hidden = false;
+  setTimeout(() => { try { $("resFName").focus(); } catch (_) {} }, 30);
+}
+function closeResourceModal() { $("resourceModal").hidden = true; }
+function showResErr(msg) { const e = $("resFErr"); e.textContent = msg; e.hidden = false; }
+
+async function saveResource() {
+  const resource = {
+    name: $("resFName").value.trim(),
+    url: $("resFUrl").value.trim(),
+    category: $("resFCat").value.trim(),
+    description: $("resFDesc").value.trim(),
+    icon: $("resFIcon").value.trim(),
+  };
+  if (state.resEditId) resource.id = state.resEditId;
+  if (!resource.name) { showResErr("Give the link a name."); $("resFName").focus(); return; }
+  if (!resource.url) { showResErr("Enter a web address (URL)."); $("resFUrl").focus(); return; }
+  $("resSaveBtn").disabled = true;
+  try {
+    const data = await apiCall(state.resEditId ? "updateResource" : "addResource", { pin: session.pin, resource: resource });
+    if (data.error) { showResErr(data.error); return; }
+    state.resources = data.resources || [];
+    renderResources();
+    closeResourceModal();
+  } catch (e) {
+    showResErr("Couldn't reach the server.");
+  } finally { $("resSaveBtn").disabled = false; }
+}
+
+async function deleteResourceLink() {
+  if (!state.resEditId) return;
+  if (!confirm("Remove this link? It will no longer appear in Imported Resources.")) return;
+  $("resDeleteBtn").disabled = true;
+  try {
+    const data = await apiCall("deleteResource", { pin: session.pin, id: state.resEditId });
+    if (data.error) { showResErr(data.error); return; }
+    state.resources = data.resources || [];
+    renderResources();
+    closeResourceModal();
+  } catch (e) {
+    showResErr("Couldn't reach the server.");
+  } finally { $("resDeleteBtn").disabled = false; }
+}
 function escapeAttr(s) { return escapeHtml(s); }
 
 /* ---------- Event wiring ---------- */
@@ -4900,6 +5053,11 @@ $("tileChecklist").addEventListener("click", () => showScreen("checklist"));
 $("tileBoxCounter").addEventListener("click", () => showScreen("boxcounter"));
 $("tileEom").addEventListener("click", () => showScreen("eom"));
 $("tileResources").addEventListener("click", () => showScreen("resources"));
+$("resAddBtn").addEventListener("click", () => openResourceModal(null));
+$("resModalClose").addEventListener("click", closeResourceModal);
+$("resCancelBtn").addEventListener("click", closeResourceModal);
+$("resSaveBtn").addEventListener("click", saveResource);
+$("resDeleteBtn").addEventListener("click", deleteResourceLink);
 document.querySelectorAll("[data-eomtab]").forEach(b => b.addEventListener("click", () => switchEomTab(b.dataset.eomtab)));
 
 // Label Printer controls.

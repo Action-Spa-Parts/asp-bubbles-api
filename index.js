@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '91';
+const APP_VERSION = '92';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -191,6 +191,34 @@ async function ensureSchema() {
       action    TEXT NOT NULL,
       detail    TEXT NOT NULL DEFAULT ''
     )`);
+
+  // Imported Resources: manager-curated external links shown on the home
+  // launcher's "Imported Resources" screen. Anyone signed in can open them;
+  // only managers add/edit/remove. Grouped by category on screen.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS resource_links (
+      id          SERIAL PRIMARY KEY,
+      name        TEXT NOT NULL,
+      url         TEXT NOT NULL,
+      category    TEXT NOT NULL DEFAULT 'Links',
+      description TEXT NOT NULL DEFAULT '',
+      icon        TEXT NOT NULL DEFAULT '🔗',
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      active      BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_by  TEXT NOT NULL DEFAULT ''
+    )`);
+  const { rows: rlc } = await pool.query('SELECT COUNT(*)::int AS n FROM resource_links');
+  if (rlc[0].n === 0) {
+    await pool.query(
+      `INSERT INTO resource_links (name, url, category, description, icon, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      ['ActionComply', 'https://actioncomply-production.up.railway.app/login',
+       'Compliance & Training',
+       'State-mandated and OSHA training, certificates of completion, and policy acknowledgements — kept current for every member of the team.',
+       '🛡️', 10]);
+    console.log('Schema: seeded 1 resource link (ActionComply).');
+  }
 
   // Employee of the Month votes. period = award month 'YYYY-MM' (the month that
   // just ended); one vote per employee per period (UNIQUE).
@@ -2493,6 +2521,77 @@ async function setBoxDisregarded(who, id, disregarded) {
   return await getBoxSizes(who);
 }
 
+/* ---------- Imported Resources (curated links) ---------- */
+// Any signed-in user can see the links.
+async function getResources(who) {
+  if (!who) return { error: 'Not authorized' };
+  const { rows } = await pool.query(
+    `SELECT id, name, url, category, description, icon
+       FROM resource_links WHERE active = true ORDER BY sort_order, id`);
+  return { resources: rows };
+}
+
+// Default a scheme-less address to https:// so a plain "example.com" still works
+// and a "javascript:" address can never become a live link.
+function normalizeUrl(u) {
+  let s = String(u == null ? '' : u).trim();
+  if (!s) return '';
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s.replace(/^\/+/, '');
+  return s.slice(0, 500);
+}
+
+// Validate + clean a link from the editor form. Returns {resource} or {error}.
+function cleanResource(r) {
+  r = r || {};
+  const name = String(r.name || '').trim().slice(0, 120);
+  const url = normalizeUrl(r.url);
+  if (!name) return { error: 'Give the link a name.' };
+  if (!url) return { error: 'Enter a web address (URL).' };
+  return {
+    resource: {
+      name,
+      url,
+      category: (String(r.category || '').trim() || 'Links').slice(0, 80),
+      description: String(r.description || '').trim().slice(0, 500),
+      icon: (String(r.icon || '').trim() || '🔗').slice(0, 12),
+    },
+  };
+}
+
+async function addResource(who, body) {
+  if (!isManager(who)) return { error: 'Only a manager can add links.' };
+  const c = cleanResource(body && body.resource);
+  if (c.error) return { error: c.error };
+  const r = c.resource;
+  const { rows: mx } = await pool.query('SELECT COALESCE(MAX(sort_order), 0) + 10 AS n FROM resource_links');
+  await pool.query(
+    `INSERT INTO resource_links (name, url, category, description, icon, sort_order, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [r.name, r.url, r.category, r.description, r.icon, mx[0].n, (who.name || '')]);
+  return await getResources(who);
+}
+
+async function updateResource(who, body) {
+  if (!isManager(who)) return { error: 'Only a manager can edit links.' };
+  const id = parseInt(body && body.resource && body.resource.id, 10);
+  if (!Number.isFinite(id)) return { error: 'Bad id.' };
+  const c = cleanResource(body && body.resource);
+  if (c.error) return { error: c.error };
+  const r = c.resource;
+  await pool.query(
+    `UPDATE resource_links SET name = $1, url = $2, category = $3, description = $4, icon = $5 WHERE id = $6`,
+    [r.name, r.url, r.category, r.description, r.icon, id]);
+  return await getResources(who);
+}
+
+async function deleteResource(who, id) {
+  if (!isManager(who)) return { error: 'Only a manager can remove links.' };
+  const rid = parseInt(id, 10);
+  if (!Number.isFinite(rid)) return { error: 'Bad id.' };
+  await pool.query('DELETE FROM resource_links WHERE id = $1', [rid]);
+  return await getResources(who);
+}
+
 /* ---------- Employee of the Month ---------- */
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 function dowOfYmd(ymd) { const [y, m, d] = ymd.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)).getUTCDay(); } // 0=Sun … 6=Sat
@@ -2806,6 +2905,11 @@ app.post('/', async (req, res) => {
         case 'updateBoxSize': out = await updateBoxSize(who, body); break;
         case 'setBoxSizeActive': out = await setBoxSizeActive(who, body.id, body.active); break;
         case 'setBoxDisregarded': out = await setBoxDisregarded(who, body.id, body.disregarded); break;
+        // ----- Imported Resources (links) -----
+        case 'getResources':    out = await getResources(who); break;
+        case 'addResource':     out = await addResource(who, body); break;
+        case 'updateResource':  out = await updateResource(who, body); break;
+        case 'deleteResource':  out = await deleteResource(who, body.id); break;
         // ----- Employee of the Month -----
         case 'getEom':       out = await getEom(who); break;
         case 'castEomVote':  out = await castEomVote(who, body.choice); break;
