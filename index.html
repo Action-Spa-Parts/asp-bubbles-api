@@ -592,6 +592,16 @@
   }
   .app-tile.alert { border-color:var(--danger); }
   .app-tile.alert .tile-icon { animation: navpulse 1.2s ease-in-out infinite; }
+  /* Imported Resources (links screen) */
+  .res-wrap { display:flex; flex-direction:column; gap:12px; max-width:520px; margin:0 auto; }
+  .res-cat { font-size:12px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); margin:6px 2px 0; }
+  .res-card { display:block; text-decoration:none; color:inherit; font:inherit; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); padding:16px; }
+  .res-card:hover { border-color:var(--accent); }
+  .res-head { display:flex; align-items:center; gap:16px; }
+  .res-ico { width:48px; height:48px; border-radius:13px; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--accent); color:#fff; font-size:24px; }
+  .res-name { font-size:16px; font-weight:700; flex:1; min-width:0; }
+  .res-open { color:var(--muted); font-size:20px; flex-shrink:0; line-height:1; }
+  .res-desc { margin:12px 0 0; font-size:13.5px; line-height:1.5; color:var(--muted); }
 
   /* Label Printer */
   #labelScreen { padding-bottom:90px; }
@@ -1007,6 +1017,14 @@
         </span>
         <span class="tile-arrow">↗</span>
       </a>
+      <button class="app-tile" id="tileResources">
+        <span class="tile-icon">🔗</span>
+        <span class="tile-body">
+          <span class="tile-name">Imported Resources</span>
+          <span class="tile-desc">Links &amp; resources</span>
+        </span>
+        <span class="tile-arrow">›</span>
+      </button>
     </div>
 
     <!-- Per-device opt-in prompt (employees). Manager controls live in Manage → Notifications. -->
@@ -1147,6 +1165,21 @@
     <div id="eomLogView" hidden>
       <div class="filterbar"><label for="eomLogPeriod">Month</label><select id="eomLogPeriod"><option value="">—</option></select></div>
       <div id="eomLogBody"></div>
+    </div>
+  </div>
+
+  <!-- ===== Imported Resources (links) ===== -->
+  <div id="resourcesScreen" hidden>
+    <div class="res-wrap">
+      <div class="res-cat">Compliance &amp; Training</div>
+      <a class="res-card" href="https://actioncomply-production.up.railway.app/login" target="_blank" rel="noopener noreferrer">
+        <span class="res-head">
+          <span class="res-ico">🛡️</span>
+          <span class="res-name">ActionComply</span>
+          <span class="res-open" aria-hidden="true">↗</span>
+        </span>
+        <p class="res-desc">State-mandated and OSHA training, certificates of completion, and policy acknowledgements — kept current for every member of the team.</p>
+      </a>
     </div>
   </div>
 
@@ -2281,6 +2314,7 @@ function showScreen(name) {
   $("boxcounterScreen").hidden = name !== "boxcounter";
   $("eomScreen").hidden = name !== "eom";
   $("labelScreen").hidden = name !== "label";
+  $("resourcesScreen").hidden = name !== "resources";
   document.querySelector(".bottomnav").hidden = name !== "bubbles";
   if (name !== "label") $("lpNav").hidden = true;   // shown for managers on the label screen (see lpShowPrinterStatus)
   $("bcNav").hidden = name !== "boxcounter";          // Box Counter's own bottom tab bar
@@ -2295,6 +2329,7 @@ function showScreen(name) {
     boxcounter: ["Box Counter", "Friday packaging box counts"],
     eom:        ["Employee of the Month", "Vote for a coworker"],
     label:      ["Label Printer", "Scan & reprint barcode labels"],
+    resources:  ["Imported Resources", "Links & resources"],
   };
   const t = titles[name] || titles.home;
   $("appTitle").textContent = t[0];
@@ -4864,6 +4899,7 @@ $("tileBubbles").addEventListener("click", openBubbles);
 $("tileChecklist").addEventListener("click", () => showScreen("checklist"));
 $("tileBoxCounter").addEventListener("click", () => showScreen("boxcounter"));
 $("tileEom").addEventListener("click", () => showScreen("eom"));
+$("tileResources").addEventListener("click", () => showScreen("resources"));
 document.querySelectorAll("[data-eomtab]").forEach(b => b.addEventListener("click", () => switchEomTab(b.dataset.eomtab)));
 
 // Label Printer controls.
