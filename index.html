@@ -1659,6 +1659,14 @@
           <button class="ghost" id="mNotifyEnableDevice" hidden>Enable on this device</button>
         </div>
         <div id="mNotifyDevices" class="muted" style="font-size:13px; margin-top:14px;"></div>
+        <div id="mBroadcastWrap" hidden style="margin-top:16px; border-top:1px solid var(--border); padding-top:14px;">
+          <div class="ftitle" style="margin-bottom:4px;">Send a message to all devices</div>
+          <div class="notify-sub" style="margin-bottom:8px;">Sends to every device with notifications enabled, right now.</div>
+          <textarea id="mBroadcastMsg" rows="2" maxlength="300" placeholder="e.g. Truck is here — all hands to the dock" style="width:100%; box-sizing:border-box;"></textarea>
+          <div class="notify-btns" style="margin-top:8px;">
+            <button class="primary" id="mBroadcastSend">Send to all devices</button>
+          </div>
+        </div>
       </div>
 
       <!-- Employee of the Month — edit votes + pick a tie-breaking winner (JS-rendered) -->
@@ -2477,6 +2485,7 @@ async function renderNotifyAdmin() {
   $("mNotifyEnableDevice").hidden = !(enabled && PUSH.supported && !subscribed);
   $("mNotifyDevices").textContent = !configured ? "Push isn't set up on the server yet."
     : (devices + " device" + (devices === 1 ? "" : "s") + " enabled.");
+  $("mBroadcastWrap").hidden = !(enabled && devices > 0);
 }
 
 async function toggleNotifyAdmin() {
@@ -2490,6 +2499,16 @@ async function sendTestPushNow() {
   const res = await apiCall("sendTestPush", { pin: session.pin });
   if (res && res.error) { alert(res.error); return; }
   alert("Sent to " + (res.sent || 0) + " device(s)" + (res.failed ? (", " + res.failed + " failed") : "") + ". Check the scanner's notification shade.");
+}
+
+async function sendBroadcastNow() {
+  const msg = ($("mBroadcastMsg").value || "").trim();
+  if (!msg) { alert("Type a message to send."); return; }
+  if (!confirm("Send this to all enabled devices?\n\n“" + msg + "”")) return;
+  const res = await apiCall("broadcastPush", { pin: session.pin, message: msg });
+  if (res && res.error) { alert(res.error); return; }
+  $("mBroadcastMsg").value = "";
+  alert("Sent to " + (res.sent || 0) + " device(s)" + (res.failed ? (", " + res.failed + " failed") : "") + ".");
 }
 
 // ----- Manage → Label Printer (daily cloud-call cap) -----
@@ -5192,6 +5211,7 @@ $("notifyEnable").addEventListener("click", enablePush);
 $("mNotifyToggle").addEventListener("click", toggleNotifyAdmin);
 $("mNotifyTest").addEventListener("click", async () => { await sendTestPushNow(); renderNotifyAdmin(); });
 $("mNotifyEnableDevice").addEventListener("click", async () => { await enablePush(); renderNotifyAdmin(); });
+$("mBroadcastSend").addEventListener("click", sendBroadcastNow);
 $("lblLimitSave").addEventListener("click", saveLabelLimit);
 $("lblPrAdd").addEventListener("click", lpSavePrinter);
 $("lblPrCancel").addEventListener("click", cancelEditPrinter);

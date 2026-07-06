@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '99';
+const APP_VERSION = '100';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -2929,6 +2929,26 @@ async function sendTestPush(who) {
   return { ok: true, ...res };
 }
 
+// Manager sends a custom one-off message to every subscribed device (e.g. "Truck
+// is here", "Team huddle now"). Reuses the same delivery path as the test push.
+async function broadcastPush(who, body) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  if (!vapidReady) return { error: 'Push notifications are not set up on the server yet.' };
+  if (!(await notifyIsEnabled())) return { error: 'Turn notifications on first.' };
+  const msg = (body && typeof body.message === 'string') ? body.message.trim() : '';
+  if (!msg) return { error: 'Type a message to send.' };
+  if (msg.length > 300) return { error: 'Message is too long (max 300 characters).' };
+  const { rows } = await pool.query('SELECT endpoint, p256dh, auth FROM push_subscriptions');
+  if (!rows.length) return { error: 'No devices have enabled notifications yet.' };
+  const res = await pushToSubs(rows, {
+    title: 'Action Spa Warehouse',
+    body: msg,
+    tag: 'asp-broadcast',
+    url: '/',
+  });
+  return { ok: true, ...res };
+}
+
 app.post('/', async (req, res) => {
   let body;
   try {
@@ -3042,6 +3062,7 @@ app.post('/', async (req, res) => {
         case 'getPushStatus':          out = await getPushStatus(who); break;
         case 'setNotifyEnabled':       out = await setNotifyEnabled(who, body.enabled); break;
         case 'sendTestPush':           out = await sendTestPush(who); break;
+        case 'broadcastPush':          out = await broadcastPush(who, body); break;
         default:                  out = { error: 'Unknown action: ' + action };
       }
     }
