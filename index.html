@@ -3973,8 +3973,8 @@ function rotationBarHtml(rot) {
   return `<div class="cl-rotbar">
     <div class="cl-rottitle">Closing order — this cycle</div>
     <div class="cl-rotlist">${chips}</div>
-    <div class="cl-rotnote">Whoever's closing today is first; once they've done it they roll to the back. Tap a name to make them today's closer. Reshuffles into a new order after everyone's had a turn.</div>
-    <button class="ghost" id="clReshuffle" style="margin-top:8px;">🔀 Reshuffle order now</button>
+    <div class="cl-rotnote">Whoever's closing today is first; once they've done it they roll to the back. Tap a name to make them today's closer. The order is alphabetical and restarts A→Z after everyone's had a turn.</div>
+    <button class="ghost" id="clReshuffle" style="margin-top:8px;">🔤 Reset to alphabetical order</button>
   </div>`;
 }
 
@@ -4047,7 +4047,7 @@ function wireReshuffleBtn() {
   const b = $("clReshuffle");
   if (!b) return;
   b.addEventListener("click", () => {
-    if (confirm("Reshuffle the closing order into a new random order? (Today's person stays; no one who did it in the last 3 days will be scheduled too soon.)")) {
+    if (confirm("Reset the closing order to alphabetical (A→Z)? (Today's person stays; no one who did it in the last 3 days will be scheduled too soon.)")) {
       adminChecklistAction("reshuffleChecklist");
     }
   });

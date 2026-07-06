@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '97';
+const APP_VERSION = '98';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1430,9 +1430,9 @@ async function ensureTodayRun() {
       `SELECT DISTINCT employee_id FROM checklist_runs WHERE employee_id IS NOT NULL AND run_date >= (${BIZ_DATE} - 3)`);
     const recentSet = new Set(rec.map(r => r.employee_id));
 
-    // Cycle rotation: shuffle everyone once per cycle, assign down the order, and
-    // RESHUFFLE only after everyone eligible has had a turn — so the order varies
-    // each cycle instead of repeating the same sequence.
+    // Cycle rotation: order eligible closers ALPHABETICALLY once per cycle, assign
+    // down the order, and re-order only after everyone eligible has had a turn — so
+    // the sequence is predictable (A→Z) and repeats each cycle.
     const { rows: rotRows } = await client.query('SELECT cycle_order, cycle_start FROM checklist_rotation WHERE id = 1');
     let order = (rotRows[0] && rotRows[0].cycle_order) ? rotRows[0].cycle_order.slice() : [];
     let cycleStart = (rotRows[0] && rotRows[0].cycle_start) ? rotRows[0].cycle_start : null;
@@ -1446,12 +1446,12 @@ async function ensureTodayRun() {
     }
     let remaining = eligibleIds.filter(id => !goneSet.has(id));
 
-    // New cycle when there's none yet or everyone eligible has gone: reshuffle into
-    // a new random order, with anyone who went in the last 3 days pushed to the BACK
-    // so they aren't scheduled within 3 days of their last turn.
+    // New cycle when there's none yet or everyone eligible has gone: rebuild the
+    // order ALPHABETICALLY, with anyone who went in the last 3 days pushed to the
+    // BACK so they aren't scheduled within 3 days of their last turn.
     if (!cycleStart || remaining.length === 0) {
       const { rows: sh } = await client.query(
-        'SELECT id FROM employees WHERE active = true AND checklist_eligible = true ORDER BY random()');
+        'SELECT id FROM employees WHERE active = true AND checklist_eligible = true ORDER BY lower(name)');
       const shuffled = sh.map(r => r.id);
       order = shuffled.filter(id => !recentSet.has(id)).concat(shuffled.filter(id => recentSet.has(id)));
       cycleStart = today;
@@ -1731,7 +1731,7 @@ async function setChecklistTaskActive(who, id, active) {
 async function resetChecklist(who) {
   if (!isManager(who)) return { error: 'Manager only' };
   await pool.query("DELETE FROM checklist_runs WHERE status = 'pending'");
-  // Start a fresh rotation cycle (new shuffle on the next pick).
+  // Start a fresh rotation cycle (new alphabetical order on the next pick).
   await pool.query("UPDATE checklist_rotation SET cycle_order = '{}', cycle_start = NULL WHERE id = 1");
   const run = await ensureTodayRun();
   return { ok: true, assignee: run ? await nameForEmpId(run.employee_id) : null };
@@ -1749,15 +1749,15 @@ async function deleteChecklistRun(who, runId) {
   return { ok: true };
 }
 
-// Re-randomize the upcoming order WITHOUT changing who already did it (keeps
-// today's assignee). Anyone who did the checklist in the last 3 days is pushed to
-// the back so they aren't scheduled within 3 days. Manager only.
+// Reset the upcoming order to ALPHABETICAL WITHOUT changing who already did it
+// (keeps today's assignee). Anyone who did the checklist in the last 3 days is
+// pushed to the back so they aren't scheduled within 3 days. Manager only.
 async function reshuffleChecklist(who) {
   if (!isManager(who)) return { error: 'Manager only' };
   const { rows: sh } = await pool.query(
-    'SELECT id FROM employees WHERE active = true AND checklist_eligible = true ORDER BY random()');
+    'SELECT id FROM employees WHERE active = true AND checklist_eligible = true ORDER BY lower(name)');
   const ids = sh.map(r => r.id);
-  if (!ids.length) return { error: 'No eligible closers to shuffle.' };
+  if (!ids.length) return { error: 'No eligible closers to order.' };
   const { rows: rec } = await pool.query(
     `SELECT DISTINCT employee_id FROM checklist_runs WHERE employee_id IS NOT NULL AND run_date >= (${BIZ_DATE} - 3)`);
   const recentSet = new Set(rec.map(r => r.employee_id));
