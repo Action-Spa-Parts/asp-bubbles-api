@@ -852,7 +852,8 @@
   .cl-rotbar { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); padding:12px 14px; margin-bottom:14px; }
   .cl-rottitle { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin-bottom:8px; }
   .cl-rotlist { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
-  .cl-rotperson { font-size:13px; font-weight:600; padding:3px 9px; border-radius:99px; background:var(--bg); border:1px solid var(--border); }
+  .cl-rotperson { font:inherit; font-size:13px; font-weight:600; padding:4px 10px; border-radius:99px; background:var(--bg); border:1px solid var(--border); color:inherit; cursor:pointer; }
+  .cl-rotperson:hover { border-color:var(--accent); }
   .cl-rotperson.cl-rot-today { background:var(--accent); color:#fff; border-color:var(--accent); }
   .cl-rotperson.cl-rot-done { color:var(--muted); text-decoration:line-through; opacity:.7; }
   .cl-rotsep { color:var(--muted); font-size:12px; }
@@ -3959,17 +3960,45 @@ function wireRunCards(body) {
 // Shows the expected rotation order for the current cycle (done · today · upcoming).
 function rotationBarHtml(rot) {
   if (!rot || !rot.length) return "";
-  const chips = rot.map(p => {
+  // Front-anchor the line on whoever is closing TODAY, then let it roll: when
+  // they finish, the next person moves to the front and they drop to the back.
+  let order = rot.slice();
+  const ti = order.findIndex(p => p.today);
+  if (ti > 0) order = order.slice(ti).concat(order.slice(0, ti));
+  const chips = order.map(p => {
     const cls = p.today ? "cl-rot-today" : (p.done ? "cl-rot-done" : "");
     const tag = p.today ? " · today" : (p.done ? " ✓" : "");
-    return `<span class="cl-rotperson ${cls}">${escapeHtml(p.name)}${tag}</span>`;
+    return `<button type="button" class="cl-rotperson ${cls}" data-rot-name="${escapeAttr(p.name)}">${escapeHtml(p.name)}${tag}</button>`;
   }).join('<span class="cl-rotsep">→</span>');
   return `<div class="cl-rotbar">
     <div class="cl-rottitle">Closing order — this cycle</div>
     <div class="cl-rotlist">${chips}</div>
-    <div class="cl-rotnote">Reshuffles into a new random order once everyone has had a turn. No one is scheduled within 3 days of their last turn.</div>
+    <div class="cl-rotnote">Whoever's closing today is first; once they've done it they roll to the back. Tap a name to make them today's closer. Reshuffles into a new order after everyone's had a turn.</div>
     <button class="ghost" id="clReshuffle" style="margin-top:8px;">🔀 Reshuffle order now</button>
   </div>`;
+}
+
+// Tap a name in the rotation bar to make that person today's closer (with a
+// confirm). Reuses reassignChecklistRun on today's run.
+function wireRotationChips(container) {
+  const d = state.checklistAdmin || {};
+  const run = (d.runs || []).find(r => r.run_date === d.today);
+  (container || document).querySelectorAll("[data-rot-name]").forEach(btn => btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const name = btn.dataset.rotName;
+    const emp = (d.employees || []).find(x => x.name === name);
+    if (!emp) { alert(name + " isn't in the closer list."); return; }
+    if (!run) { alert("There's no closing run scheduled today yet."); return; }
+    if (run.status === "completed") { alert("Today's checklist is already completed."); return; }
+    if (name === run.assignee) { alert(name + " is already closing today."); return; }
+    let msg = "Make " + name + " today's closer?";
+    if (emp.recent) {
+      const when = emp.lastRun ? (" on " + fmtRunDate(emp.lastRun)) : "";
+      msg = name + " already closed" + when + " — within the last 3 days.\n\nAssign it to them anyway?";
+    }
+    if (!confirm(msg)) return;
+    adminChecklistAction("reassignChecklistRun", { runId: run.id, employeeId: emp.id });
+  }));
 }
 
 function renderChecklistAdmin() {
@@ -3979,6 +4008,7 @@ function renderChecklistAdmin() {
   if (!data || !data.runs || !data.runs.length) {
     body.innerHTML = rotationBarHtml(data && data.rotation) || `<div class="cl-banner info">No checklist activity yet.</div>`;
     wireReshuffleBtn();
+    wireRotationChips(body);
     return;
   }
   const toggle = `<div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;">
@@ -4009,6 +4039,7 @@ function renderChecklistAdmin() {
   $("clfDate").addEventListener("change", () => { state.checklistFilter.date = $("clfDate").value; renderChecklistAdmin(); });
   $("clfClear").addEventListener("click", () => { state.checklistFilter = { name: "", date: "" }; renderChecklistAdmin(); });
   wireReshuffleBtn();
+  wireRotationChips(body);
   wireRunCards(body);
 }
 
