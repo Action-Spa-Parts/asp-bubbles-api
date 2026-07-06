@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '98';
+const APP_VERSION = '99';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1417,24 +1417,17 @@ async function ensureTodayRun() {
     const { rows: tRows } = await client.query(`SELECT to_char(${BIZ_DATE}, 'YYYY-MM-DD') AS d`);
     const today = tRows[0].d;
 
-    // Eligible closers (active + in the rotation). Angel etc. are excluded.
+    // Eligible closers (active + in the rotation), in ALPHABETICAL order — this list
+    // IS the closing order. Angel etc. are excluded.
     const { rows: elig } = await client.query(
-      'SELECT id FROM employees WHERE active = true AND checklist_eligible = true');
+      'SELECT id FROM employees WHERE active = true AND checklist_eligible = true ORDER BY lower(name)');
     const eligibleIds = elig.map(r => r.id);
     if (!eligibleIds.length) { await client.query('ROLLBACK'); return null; }
-    const eligSet = new Set(eligibleIds);
 
-    // Who did the checklist in the last 3 days — they shouldn't be reassigned yet,
-    // and a fresh shuffle puts them at the BACK so they aren't scheduled too soon.
-    const { rows: rec } = await client.query(
-      `SELECT DISTINCT employee_id FROM checklist_runs WHERE employee_id IS NOT NULL AND run_date >= (${BIZ_DATE} - 3)`);
-    const recentSet = new Set(rec.map(r => r.employee_id));
-
-    // Cycle rotation: order eligible closers ALPHABETICALLY once per cycle, assign
-    // down the order, and re-order only after everyone eligible has had a turn — so
-    // the sequence is predictable (A→Z) and repeats each cycle.
-    const { rows: rotRows } = await client.query('SELECT cycle_order, cycle_start FROM checklist_rotation WHERE id = 1');
-    let order = (rotRows[0] && rotRows[0].cycle_order) ? rotRows[0].cycle_order.slice() : [];
+    // Cycle rotation: walk straight down the alphabetical order, one closer per day.
+    // We track only the cycle START; once everyone eligible has had a turn this cycle
+    // we restart a fresh A→Z pass. No randomness, no recency reordering.
+    const { rows: rotRows } = await client.query('SELECT cycle_start FROM checklist_rotation WHERE id = 1');
     let cycleStart = (rotRows[0] && rotRows[0].cycle_start) ? rotRows[0].cycle_start : null;
 
     // Who has already had a turn this cycle (by the run they were assigned).
@@ -1446,36 +1439,20 @@ async function ensureTodayRun() {
     }
     let remaining = eligibleIds.filter(id => !goneSet.has(id));
 
-    // New cycle when there's none yet or everyone eligible has gone: rebuild the
-    // order ALPHABETICALLY, with anyone who went in the last 3 days pushed to the
-    // BACK so they aren't scheduled within 3 days of their last turn.
+    // New cycle when there's none yet or everyone eligible has gone: restart A→Z.
     if (!cycleStart || remaining.length === 0) {
-      const { rows: sh } = await client.query(
-        'SELECT id FROM employees WHERE active = true AND checklist_eligible = true ORDER BY lower(name)');
-      const shuffled = sh.map(r => r.id);
-      order = shuffled.filter(id => !recentSet.has(id)).concat(shuffled.filter(id => recentSet.has(id)));
       cycleStart = today;
       goneSet = new Set();
-      remaining = order.slice();
+      remaining = eligibleIds.slice();
     }
 
-    // Follow the shuffled order; newcomers added mid-cycle go at the end.
-    const pos = new Map(order.map((id, i) => [id, i]));
-    const orderedRemaining = remaining.slice().sort((a, b) =>
-      (pos.has(a) ? pos.get(a) : 1e9) - (pos.has(b) ? pos.get(b) : 1e9));
+    // Next closer = first person in alphabetical order who hasn't gone this cycle.
+    const pickId = remaining[0];
 
-    // Pick the next in order who hasn't done it in the last 3 days; relax only if
-    // everyone left went recently (tiny roster) so a run is still assigned.
-    let candidates = orderedRemaining.filter(id => !recentSet.has(id));
-    if (!candidates.length) candidates = orderedRemaining;
-    const pickId = candidates[0];
-
-    // Persist the cycle order: keep current eligible (append newcomers, drop the rest).
-    let newOrder = order.filter(id => eligSet.has(id));
-    for (const id of eligibleIds) if (!pos.has(id)) newOrder.push(id);
+    // Persist the alphabetical order + cycle start (cycle_order kept for back-compat).
     await client.query(
       'UPDATE checklist_rotation SET cycle_order = $1, cycle_start = $2 WHERE id = 1',
-      [newOrder, cycleStart]);
+      [eligibleIds, cycleStart]);
 
     const ins = await client.query(
       `INSERT INTO checklist_runs (run_date, employee_id) VALUES (${BIZ_DATE}, $1) RETURNING *`,
@@ -1574,18 +1551,12 @@ async function submitChecklist(who) {
 // shifting someone out). Mirrors how ensureTodayRun() picks.
 async function rotationView() {
   const { rows: elig } = await pool.query(
-    'SELECT id, name FROM employees WHERE active = true AND checklist_eligible = true');
+    'SELECT id, name FROM employees WHERE active = true AND checklist_eligible = true ORDER BY lower(name)');
   const nameById = new Map(elig.map(r => [r.id, r.name]));
-  const eligibleIds = elig.map(r => r.id);
-  if (!eligibleIds.length) return [];
-  const eligSet = new Set(eligibleIds);
-  const { rows: rotRows } = await pool.query('SELECT cycle_order, cycle_start FROM checklist_rotation WHERE id = 1');
-  let order = (rotRows[0] && rotRows[0].cycle_order) ? rotRows[0].cycle_order.slice() : [];
+  const cur = elig.map(r => r.id);   // alphabetical — the closing order
+  if (!cur.length) return [];
+  const { rows: rotRows } = await pool.query('SELECT cycle_start FROM checklist_rotation WHERE id = 1');
   const cycleStart = (rotRows[0] && rotRows[0].cycle_start) ? rotRows[0].cycle_start : null;
-  // Same normalization the picker uses: drop ineligible, append newcomers.
-  const pos = new Map(order.map((id, i) => [id, i]));
-  let cur = order.filter(id => eligSet.has(id));
-  for (const id of eligibleIds) if (!pos.has(id)) cur.push(id);
 
   let goneSet = new Set();
   if (cycleStart) {
@@ -1749,21 +1720,17 @@ async function deleteChecklistRun(who, runId) {
   return { ok: true };
 }
 
-// Reset the upcoming order to ALPHABETICAL WITHOUT changing who already did it
-// (keeps today's assignee). Anyone who did the checklist in the last 3 days is
-// pushed to the back so they aren't scheduled within 3 days. Manager only.
+// Restart the cycle now: a fresh alphabetical (A→Z) pass starting from today,
+// keeping today's assignee. The order is always alphabetical; this just resets
+// who counts as "already gone" so the upcoming names start clean. Manager only.
 async function reshuffleChecklist(who) {
   if (!isManager(who)) return { error: 'Manager only' };
   const { rows: sh } = await pool.query(
     'SELECT id FROM employees WHERE active = true AND checklist_eligible = true ORDER BY lower(name)');
-  const ids = sh.map(r => r.id);
-  if (!ids.length) return { error: 'No eligible closers to order.' };
-  const { rows: rec } = await pool.query(
-    `SELECT DISTINCT employee_id FROM checklist_runs WHERE employee_id IS NOT NULL AND run_date >= (${BIZ_DATE} - 3)`);
-  const recentSet = new Set(rec.map(r => r.employee_id));
-  const order = ids.filter(id => !recentSet.has(id)).concat(ids.filter(id => recentSet.has(id)));
+  const order = sh.map(r => r.id);
+  if (!order.length) return { error: 'No eligible closers.' };
   const today = (await pool.query(`SELECT to_char(${BIZ_DATE}, 'YYYY-MM-DD') AS d`)).rows[0].d;
-  // cycle_start = today so anyone already assigned today counts as gone (stays at the back).
+  // cycle_start = today so today's closer counts as gone; everyone else starts fresh.
   await pool.query('UPDATE checklist_rotation SET cycle_order = $1, cycle_start = $2 WHERE id = 1', [order, today]);
   return { ok: true };
 }
