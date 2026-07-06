@@ -1,0 +1,21 @@
+{
+  "name": "asp-warehouse-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Action Spa Warehouse API (Bubbles, Closing Checklist, Label Printer, etc.)",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "nodemailer": "^6.9.14",
+    "pg": "^8.12.0",
+    "web-push": "^3.6.7"
+  }
+}
