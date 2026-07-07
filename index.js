@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '101';
+const APP_VERSION = '102';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -838,12 +838,18 @@ async function getPublic() {
     `SELECT size, quantity, low_threshold AS "lowThreshold"
        FROM box_sizes WHERE active = true ORDER BY sort_order, id`);
 
+  // Imported Resources (curated links) — read-only for the TV wall display.
+  const { rows: resources } = await pool.query(
+    `SELECT name, url, category, description, icon
+       FROM resource_links WHERE active = true ORDER BY sort_order, id`);
+
   return {
     balances: balances.rows,
     rules: rules.rows,
     activity: activity.rows,
     checklist,
     boxSizes,
+    resources,
     version: APP_VERSION,
   };
 }

@@ -137,6 +137,17 @@
   .earn-row .eval { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--good); white-space: nowrap; }
   .earn-row .eval.neg { color: var(--danger); }
 
+  /* ---------- Imported Resources (read-only cards) ---------- */
+  .res-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 24px; align-items: start; }
+  .res-cat { grid-column: 1 / -1; font-size: 15px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); font-weight: 700; margin: 8px 2px 0; }
+  .res-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 26px; box-shadow: var(--shadow-card); }
+  .res-head { display: flex; align-items: center; gap: 18px; }
+  .res-ic { width: 64px; height: 64px; border-radius: 16px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: var(--accent); color: #fff; font-size: 32px; }
+  .res-ic img { width: 64px; height: 64px; border-radius: 16px; display: block; object-fit: cover; }
+  .res-name { font-size: 24px; font-weight: 700; }
+  .res-desc { color: var(--muted); font-size: 16px; line-height: 1.5; margin-top: 14px; }
+  .res-url { margin-top: 12px; font-size: 16px; font-weight: 600; color: var(--accent); word-break: break-all; }
+
   /* ---------- Empty / loading ---------- */
   .empty { text-align: center; padding: 80px 20px; color: var(--muted); }
   .empty h3 { color: var(--text); margin: 0 0 8px; font-size: 26px; font-weight: 700; }
@@ -276,6 +287,11 @@
             <span class="tname">Box Counter</span>
             <span class="tdesc">Box sizes &amp; stock</span>
           </button>
+          <button class="tv-tile" id="tileResources">
+            <span class="ic">🔗</span>
+            <span class="tname">Imported Resources</span>
+            <span class="tdesc">Links &amp; resources</span>
+          </button>
         </div>
       </div>
     </div>
@@ -324,6 +340,13 @@
       </div>
       <div id="bcList" class="bc-list"></div>
     </div>
+
+    <!-- Imported Resources (read-only links) -->
+    <div id="resourcesScreen" hidden>
+      <div class="view" id="view-resources">
+        <div class="res-grid" id="resList"></div>
+      </div>
+    </div>
   </main>
 
   <nav class="tabs" id="tabs" hidden>
@@ -344,7 +367,7 @@ const REFRESH_MS = 20000;   // re-pull data every 20s
 const STALE_MS   = 70000;   // if no successful pull in this long, show "reconnecting"
 
 /* ===== State ===== */
-const state = { balances: [], rules: [], activity: [], checklist: null, boxSizes: [], boxSearch: { l: "", w: "", h: "" }, boxSort: "default", screen: "home", view: "board", lastOk: 0, loadedVersion: null };
+const state = { balances: [], rules: [], activity: [], checklist: null, boxSizes: [], resources: [], boxSearch: { l: "", w: "", h: "" }, boxSort: "default", screen: "home", view: "board", lastOk: 0, loadedVersion: null };
 const $ = (id) => document.getElementById(id);
 
 /* ===== Helpers ===== */
@@ -546,12 +569,47 @@ function renderBoxList() {
   }).join("");
 }
 
+/* ---------- Imported Resources (read-only) ---------- */
+// An icon is either a short emoji or an image (served path / URL / data URI).
+function resIsImageIcon(icon) {
+  return /^(data:image\/|https?:\/\/|\/)/i.test(icon) || /\.(png|jpe?g|webp|gif|svg)(\?.*)?$/i.test(icon);
+}
+function prettyUrl(u) {
+  return String(u || "").replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+}
+function renderResources() {
+  const el = $("resList");
+  if (!el) return;
+  const res = (state.resources || []).filter(r => r && r.name);
+  if (!res.length) {
+    el.innerHTML = `<div class="empty"><h3>No resources yet</h3><div>A manager can add links in the app.</div></div>`;
+    return;
+  }
+  const byCat = {};
+  res.forEach(r => { const c = String(r.category || "Links").trim() || "Links"; (byCat[c] = byCat[c] || []).push(r); });
+  el.innerHTML = Object.keys(byCat).map(cat => {
+    const cards = byCat[cat].map(r => {
+      const icon = String(r.icon || "🔗");
+      const ic = resIsImageIcon(icon)
+        ? `<span class="res-ic"><img src="${escapeHtml(icon)}" alt=""></span>`
+        : `<span class="res-ic">${escapeHtml(icon)}</span>`;
+      return `<div class="res-card">
+        <div class="res-head">${ic}<div class="res-name">${escapeHtml(r.name)}</div></div>
+        ${r.description ? `<div class="res-desc">${escapeHtml(r.description)}</div>` : ""}
+        ${r.url ? `<div class="res-url">${escapeHtml(prettyUrl(r.url))}</div>` : ""}
+      </div>`;
+    }).join("");
+    return `<div class="res-cat">${escapeHtml(cat)}</div>` + cards;
+  }).join("");
+}
+
 function render() {
   renderBoard();
   renderActivity();
   renderEarn();
   renderChecklist();
   renderBoxList();
+  renderResources();
   // Show who's on closing duty today, right on the home-screen tile.
   const ct = $("clTileDesc");
   if (ct) {
@@ -582,15 +640,18 @@ function showScreen(name) {
   $("bubblesScreen").hidden = name !== "bubbles";
   $("checklistScreen").hidden = name !== "checklist";
   $("boxcounterScreen").hidden = name !== "boxcounter";
+  $("resourcesScreen").hidden = name !== "resources";
   $("tabs").hidden = name !== "bubbles";
   $("tvHome").hidden = name === "home";
   document.querySelector("header.top .brand").hidden = name === "home";
   if (name === "boxcounter") renderBoxList();
+  if (name === "resources") renderResources();
   const titles = {
     home:       ["Action Spa Warehouse", "Tap an app to view"],
     bubbles:    ["Action Spa Warehouse", "Live leaderboard"],
     checklist:  ["Closing Checklist", "End-of-day tasks"],
     boxcounter: ["Box Counter", "Box sizes & stock"],
+    resources:  ["Imported Resources", "Links & resources"],
   };
   const t = titles[name] || titles.home;
   $("tvTitle").textContent = t[0];
@@ -601,6 +662,7 @@ $("tvHome").addEventListener("click", () => showScreen("home"));
 $("tileBubbles").addEventListener("click", () => { showScreen("bubbles"); switchView("board"); });
 $("tileChecklist").addEventListener("click", () => showScreen("checklist"));
 $("tileBoxCounter").addEventListener("click", () => showScreen("boxcounter"));
+$("tileResources").addEventListener("click", () => showScreen("resources"));
 // Leave the read-only TV and open the full app (which shows its normal login),
 // so someone can request/edit right on the big screen.
 $("tvSignin").addEventListener("click", () => { window.location.href = "/"; });
@@ -641,6 +703,7 @@ async function fetchData() {
     state.activity = data.activity || [];
     state.checklist = data.checklist || null;
     state.boxSizes = data.boxSizes || [];
+    state.resources = data.resources || [];
     state.lastOk   = Date.now();
     // Auto-update: if a new version is live, the unattended TV just reloads itself.
     if (data.version) {
