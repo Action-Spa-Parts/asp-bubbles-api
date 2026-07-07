@@ -1186,6 +1186,10 @@
         <button class="primary" id="bcSaveBtn" disabled>Save count</button>
       </div>
     </div>
+    <div id="bcReordersView" hidden>
+      <div class="bc-hint">Box sizes at or below their low alert (or out of stock) — these need reordering. Set a “Low ≤” number on the Sizes tab to control what shows here.</div>
+      <div id="bcReordersList"></div>
+    </div>
     <div id="bcSizesView" hidden>
       <div class="bc-hint">Current inventory and the optional low-stock alert per size. Set a number in “Low ≤” to flag that size when stock drops to it; leave blank for no alert.</div>
       <div id="bcSizesList"></div>
@@ -1332,6 +1336,9 @@
 <nav class="bottomnav" id="bcNav" hidden>
   <button class="navbtn active" data-bctab="count">
     <span class="navicon">📋</span><span>Count</span>
+  </button>
+  <button class="navbtn" data-bctab="reorders">
+    <span class="navicon">🛒</span><span>Reorders</span>
   </button>
   <button class="navbtn" data-bctab="sizes">
     <span class="navicon">📦</span><span>Sizes</span>
@@ -3258,17 +3265,49 @@ function bcVisibleSizes(includeDisregarded) {
 function switchBoxTab(tab) {
   state.boxTab = tab;
   $("bcCountView").hidden = tab !== "count";
+  $("bcReordersView").hidden = tab !== "reorders";
   $("bcSizesView").hidden = tab !== "sizes";
   $("bcActivityView").hidden = tab !== "activity";
-  $("bcControls").hidden = tab === "activity";   // the size search/sort doesn't apply to the log
+  $("bcControls").hidden = tab === "activity" || tab === "reorders";   // search/sort don't apply to the log or reorders
   document.querySelectorAll("[data-bctab]").forEach(b => b.classList.toggle("active", b.dataset.bctab === tab));
   if (tab === "activity") loadBoxActivity(); else renderBox();
 }
 
 function renderBox() {
   if (state.boxTab === "sizes") renderBoxSizes();
+  else if (state.boxTab === "reorders") renderBoxReorders();
   else if (state.boxTab === "activity") renderBoxActivity();
   else renderBoxCount();
+}
+
+// Box sizes that need reordering: out of stock first, then low (at/below their
+// low alert). Sizes without a low alert set never appear here.
+function renderBoxReorders() {
+  const el = $("bcReordersList");
+  const need = (state.boxSizes || [])
+    .filter(s => !s.disregarded && bcFlag(s, Number(s.quantity)) !== "")
+    .sort((a, b) => {
+      const fa = bcFlag(a, Number(a.quantity)) === "out" ? 0 : 1;
+      const fb = bcFlag(b, Number(b.quantity)) === "out" ? 0 : 1;
+      if (fa !== fb) return fa - fb;
+      return Number(a.quantity) - Number(b.quantity);
+    });
+  if (!need.length) {
+    el.innerHTML = `<div class="cl-banner done">✓ Nothing needs reordering — every box size is above its low alert.</div>`;
+    return;
+  }
+  el.innerHTML = need.map(s => {
+    const flag = bcFlag(s, Number(s.quantity));
+    const thr = s.lowThreshold != null ? Number(s.lowThreshold) : null;
+    return `
+      <div class="bc-row ${flag}">
+        <div class="bc-grow">
+          <div class="bc-size">${escapeHtml(s.size)}</div>
+          <div class="bc-sub">In stock: ${Number(s.quantity).toLocaleString()}${thr != null ? " · low alert ≤ " + thr : ""}</div>
+        </div>
+        <span>${bcFlagBadge(flag)}</span>
+      </div>`;
+  }).join("");
 }
 
 async function loadBoxActivity() {

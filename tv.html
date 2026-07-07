@@ -231,6 +231,9 @@
   .tv-tile.soon:hover { border-color: var(--border); }
 
   /* ---------- Box Counter (read-only) ---------- */
+  .bc-viewtabs { display:flex; gap:12px; margin-bottom:22px; }
+  .bc-vtab { font:inherit; font-size:19px; font-weight:700; padding:11px 22px; border:1px solid var(--border); border-radius:12px; background:var(--surface); color:var(--muted); cursor:pointer; }
+  .bc-vtab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
   .bc-search { display:flex; align-items:center; gap:10px; font-size:18px; color:var(--muted); margin-bottom:24px; flex-wrap:wrap; }
   .bc-search input { width:74px; padding:10px; text-align:center; font-size:22px; border:1px solid var(--border); border-radius:10px; font-family:inherit; }
   .bc-search button { font:inherit; font-size:16px; font-weight:600; padding:10px 18px; border:1px solid var(--border); border-radius:10px; background:var(--surface); cursor:pointer; color:var(--text); }
@@ -342,7 +345,11 @@
 
     <!-- Box Counter (read-only: sizes + quantities, with dimension search) -->
     <div id="boxcounterScreen" hidden>
-      <div class="bc-search">
+      <div class="bc-viewtabs" id="bcViewTabs">
+        <button class="bc-vtab active" data-boxview="all">All sizes</button>
+        <button class="bc-vtab" data-boxview="reorders">🛒 Reorders needed <span id="bcReorderCount"></span></button>
+      </div>
+      <div class="bc-search" id="bcSearchBar">
         <span>Find</span>
         <input inputmode="numeric" pattern="[0-9]*" data-bcsearch="l" placeholder="L" aria-label="Length">
         <span class="bc-x">×</span>
@@ -402,7 +409,7 @@ const REFRESH_MS = 20000;   // re-pull data every 20s
 const STALE_MS   = 70000;   // if no successful pull in this long, show "reconnecting"
 
 /* ===== State ===== */
-const state = { balances: [], rules: [], activity: [], checklist: null, boxSizes: [], resources: [], boxSearch: { l: "", w: "", h: "" }, boxSort: "default", screen: "home", view: "board", lastOk: 0, loadedVersion: null };
+const state = { balances: [], rules: [], activity: [], checklist: null, boxSizes: [], resources: [], boxSearch: { l: "", w: "", h: "" }, boxSort: "default", boxView: "all", screen: "home", view: "board", lastOk: 0, loadedVersion: null };
 const $ = (id) => document.getElementById(id);
 
 /* ===== Helpers ===== */
@@ -577,9 +584,29 @@ function renderChecklist() {
   el.innerHTML = banner + groups + clHistoryHtml(c.history, c.today);
 }
 
+function boxFlag(s) {
+  const q = num(s.quantity);
+  return q === 0 ? "out" : (s.lowThreshold != null && q <= Number(s.lowThreshold) ? "low" : "");
+}
 function renderBoxList() {
   const el = $("bcList"); if (!el) return;
+  // Reorders-needed count + tab label; hide the size search on the reorders view.
+  const reorderN = (state.boxSizes || []).filter(s => boxFlag(s) !== "").length;
+  const rc = $("bcReorderCount"); if (rc) rc.textContent = reorderN ? "(" + reorderN + ")" : "";
+  document.querySelectorAll("[data-boxview]").forEach(b => b.classList.toggle("active", b.dataset.boxview === state.boxView));
+  const sb = $("bcSearchBar"); if (sb) sb.hidden = state.boxView === "reorders";
   if (!state.boxSizes || !state.boxSizes.length) { el.innerHTML = `<div class="empty"><h3>Loading…</h3></div>`; return; }
+  if (state.boxView === "reorders") {
+    const need = state.boxSizes.filter(s => boxFlag(s) !== "")
+      .sort((a, b) => (boxFlag(a) === "out" ? 0 : 1) - (boxFlag(b) === "out" ? 0 : 1) || num(a.quantity) - num(b.quantity));
+    if (!need.length) { el.innerHTML = `<div class="empty"><h3>✓ Nothing needs reordering</h3><div>Every box size is above its low alert.</div></div>`; return; }
+    el.innerHTML = need.map(s => {
+      const flag = boxFlag(s);
+      const badge = flag === "out" ? `<span class="bc-cardflag out">Out</span>` : `<span class="bc-cardflag low">Low</span>`;
+      return `<div class="bc-card ${flag}"><div class="s">${escapeHtml(s.size)}</div>${badge}<div class="q">${num(s.quantity).toLocaleString()}<small>in stock</small></div></div>`;
+    }).join("");
+    return;
+  }
   const f = state.boxSearch;
   let list = state.boxSizes.filter(s => {
     const d = String(s.size).toLowerCase().split("x").map(n => parseInt(n, 10));
@@ -747,6 +774,7 @@ $("bcSearchClear").addEventListener("click", () => {
   renderBoxList();
 });
 $("bcSort").addEventListener("change", () => { state.boxSort = $("bcSort").value; renderBoxList(); });
+document.querySelectorAll("[data-boxview]").forEach(b => b.addEventListener("click", () => { state.boxView = b.dataset.boxview; renderBoxList(); }));
 
 /* ===== Clock + live indicator ===== */
 function tick() {
