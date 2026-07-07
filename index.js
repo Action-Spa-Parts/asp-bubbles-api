@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '103';
+const APP_VERSION = '104';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1303,6 +1303,18 @@ async function setRewardActive(who, id, active) {
   const rid = cleanInt(id);
   if (rid === null) return { error: 'Bad reward id' };
   await pool.query(`UPDATE rewards SET active=$1 WHERE id=$2`, [!!active, rid]);
+  return { ok: true };
+}
+
+// Permanently delete a reward (e.g. an accidental duplicate). Refuses if it has
+// redemption history — the manager should turn it off instead to keep the record.
+async function deleteReward(who, id) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const rid = cleanInt(id);
+  if (rid === null) return { error: 'Bad reward id' };
+  const { rows } = await pool.query('SELECT COUNT(*)::int AS n FROM redemptions WHERE reward_id = $1', [rid]);
+  if (rows[0].n > 0) return { error: 'This reward has redemption history — turn it off instead of deleting.' };
+  await pool.query('DELETE FROM rewards WHERE id = $1', [rid]);
   return { ok: true };
 }
 
@@ -3167,6 +3179,7 @@ app.post('/', async (req, res) => {
         case 'addReward':         out = await addReward(who, body.reward); break;
         case 'updateReward':      out = await updateReward(who, body.reward); break;
         case 'setRewardActive':   out = await setRewardActive(who, body.id, body.active); break;
+        case 'deleteReward':      out = await deleteReward(who, body.id); break;
         case 'addEmployee':       out = await addEmployee(who, body.employee); break;
         case 'updateEmployee':    out = await updateEmployee(who, body.employee); break;
         case 'setEmployeeActive': out = await setEmployeeActive(who, body.id, body.active); break;

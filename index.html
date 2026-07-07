@@ -5066,11 +5066,15 @@ function renderRewardAdmin() {
           <div class="aactions">
             <button class="ghost" data-edit="${r.id}">Edit</button>
             <button class="ghost" data-toggle="${r.id}" data-active="${r.active ? 0 : 1}">${r.active ? "Turn off" : "Turn on"}</button>
+            <button class="ghost danger" data-delreward="${r.id}" data-name="${escapeAttr(r.name)}">Delete</button>
           </div>
         </div>
       </div>`).join("");
   el.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => editReward(parseInt(b.dataset.edit, 10))));
   el.querySelectorAll("[data-toggle]").forEach(b => b.addEventListener("click", () => adminSave("setRewardActive", { id: parseInt(b.dataset.toggle, 10), active: b.dataset.active === "1" })));
+  el.querySelectorAll("[data-delreward]").forEach(b => b.addEventListener("click", () =>
+    askConfirm(`Delete the reward "${b.dataset.name}"? This can't be undone.`,
+      () => adminSave("deleteReward", { id: parseInt(b.dataset.delreward, 10) }), { okText: "Delete" })));
 }
 function showRewardForm(r) {
   $("rewardFormTitle").textContent = r ? "Edit reward" : "New reward";
