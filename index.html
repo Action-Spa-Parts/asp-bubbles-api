@@ -918,6 +918,8 @@
       <div style="font-weight:700; font-size:20px; letter-spacing:-0.02em; margin-top:14px;">Action Spa Warehouse</div>
       <div class="muted" style="font-size:13px; margin-top:2px;">Warehouse rewards</div>
     </div>
+    <!-- Whose turn it is to close tonight (from the public feed, no login needed) -->
+    <div id="loginClosingNote" style="display:none; margin:2px 22px 10px; padding:11px 14px; background:#e8eefc; border:1px solid #cdd9f7; border-radius:12px; text-align:center; font-size:13.5px; color:#1e3a8a; font-weight:600;"></div>
     <!-- Employee PIN view (default) -->
     <form class="dbody" id="loginForm" style="display:flex; flex-direction:column; gap:12px; padding-top:8px;">
       <p class="muted" style="margin:0; font-size:13px; text-align:center;">
@@ -4677,6 +4679,24 @@ async function checkVersion() {
     if (data && data.version) applyVersion(data.version);
   } catch (e) { /* offline / transient — ignore */ }
 }
+
+// Show whose turn it is to close on the sign-in card (public data — no login needed).
+async function loadClosingNote() {
+  const el = $("loginClosingNote");
+  if (!el) return;
+  try {
+    const d = await apiCall("getPublic", {});
+    const c = d && d.checklist;
+    if (c && c.assignee) {
+      el.innerHTML = c.status === "completed"
+        ? `✅ <strong>${escapeHtml(c.assignee)}</strong> completed today's closing checklist`
+        : `📋 Closing tonight: <strong>${escapeHtml(c.assignee)}</strong>`;
+      el.style.display = "block";
+    } else {
+      el.style.display = "none";
+    }
+  } catch (e) { /* offline / transient — leave hidden */ }
+}
 // Tapping "Update now" clears the cached app + reloads to the new version (no manual hard reset).
 async function doUpdate() {
   const btn = $("updateBtn"); if (btn) { btn.disabled = true; btn.textContent = "Updating…"; }
@@ -5285,8 +5305,9 @@ $("adminSignupForm").addEventListener("submit", (e) => { e.preventDefault(); doA
 $("logoutBtn").addEventListener("click", logout);
 $("updateBtn").addEventListener("click", doUpdate);
 checkVersion();                                                  // on load (works even on the login screen)
+loadClosingNote();                                               // show tonight's closer on the sign-in card
 setInterval(checkVersion, 5 * 60 * 1000);                        // every 5 min while open
-document.addEventListener("visibilitychange", () => { if (!document.hidden) checkVersion(); });  // when reopened/refocused
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { checkVersion(); loadClosingNote(); } });  // when reopened/refocused
 
 $("refreshBtn").addEventListener("click", refreshCurrent);
 $("notifyEnable").addEventListener("click", enablePush);
