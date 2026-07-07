@@ -3794,6 +3794,10 @@ function renderChecklistEmployee() {
     html = `<div class="cl-banner info"><strong>${escapeHtml(c.assignee)}</strong> is on closing duty today — ${c.status === "completed" ? "checklist completed ✓" : "checklist not done yet."}</div>`;
   } else if (c.status === "completed") {
     html = `<div class="cl-banner done">✓ You completed today's closing checklist. Thanks!</div>` + renderChecklistReadonly(c.items);
+  } else if (!c.started) {
+    // Not started yet — show the start prompt; the timer begins when they tap Start.
+    html = `<div class="cl-banner">It's your turn to close up tonight. 🔒<br><br>Tap <strong>Start</strong> when you're ready to begin. The checklist is timed so the manager can see how long closing takes.<br><br><strong>⚠️ Bubbles can be taken away if you don't complete the checklist, or if you check something off that wasn't actually done.</strong></div>`;
+    html += `<div class="cl-submitbar"><button class="primary" id="clStartBtn">▶ Start closing checklist</button></div>`;
   } else {
     interactive = true;
     const groups = groupByCategory(c.items);
@@ -3822,6 +3826,9 @@ function renderChecklistEmployee() {
   }
   body.innerHTML = html;
 
+  const startBtn = $("clStartBtn");
+  if (startBtn) startBtn.addEventListener("click", startChecklistNow);
+
   if (interactive) {
     body.querySelectorAll("input[data-cb]").forEach(cb => {
       cb.addEventListener("change", () => {
@@ -3845,6 +3852,18 @@ function renderChecklistReadonly(items) {
           <span class="cl-label">${escapeHtml(it.label)}${it.flagged ? ` <span class="cl-flagnote">⚑ flagged</span>` : ""}</span>
         </div>`).join("")}
     </div>`).join("");
+}
+
+async function startChecklistNow() {
+  const btn = $("clStartBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "Starting…"; }
+  const res = await apiCall("startChecklist", { pin: session.pin });
+  if (res && res.error) {
+    alert(res.error);
+    if (btn) { btn.disabled = false; btn.textContent = "▶ Start closing checklist"; }
+    return;
+  }
+  await loadChecklist();   // re-fetch → started=true → reveals the task list
 }
 
 async function submitChecklistNow() {
@@ -3893,6 +3912,24 @@ function reassignHtml(r) {
     </div>`;
 }
 
+// Manager-only closing timer. Employee payloads have no started_at/duration_secs
+// (stripped server-side), so this returns "" for them.
+function fmtChecklistDuration(r) {
+  const fmt = (secs) => {
+    secs = Math.max(0, Math.round(secs));
+    const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+    if (h) return h + "h " + String(m).padStart(2, "0") + "m";
+    if (m) return m + "m " + String(s).padStart(2, "0") + "s";
+    return s + "s";
+  };
+  if (r.status === "completed" && r.duration_secs != null) return "⏱ done in " + fmt(r.duration_secs);
+  if (r.status !== "completed" && r.started_at) {
+    const el = (Date.now() - new Date(r.started_at).getTime()) / 1000;
+    if (el >= 0) return "⏱ in progress · " + fmt(el);
+  }
+  return "";
+}
+
 function runCardsHtml(runs, today, opts) {
   opts = opts || {};
   const interactive = !!opts.interactive;
@@ -3902,13 +3939,14 @@ function runCardsHtml(runs, today, opts) {
     if (r.status !== "completed" && today && r.run_date < today) { statusClass = "missed"; statusLabel = "Not completed"; }
     const flaggedCount = r.items.filter(it => it.flagged).length;
     const checkedCount = r.items.filter(it => it.checked).length;
+    const durLabel = fmtChecklistDuration(r);   // manager-only; employee payload has no timing data
     const open = false;   // collapsed by default — click the header to expand
     return `
       <div class="cl-run">
         <div class="cl-runhead" data-run="${r.id}">
           <div>
             <div class="cl-rh-l">${fmtRunDate(r.run_date)} — ${escapeHtml(r.assignee || "Unassigned")}</div>
-            <div class="cl-rh-sub">${checkedCount}/${r.items.length} checked${flaggedCount ? " · " + flaggedCount + " flagged" : ""}</div>
+            <div class="cl-rh-sub">${checkedCount}/${r.items.length} checked${flaggedCount ? " · " + flaggedCount + " flagged" : ""}${durLabel ? " · " + durLabel : ""}</div>
           </div>
           <div class="cl-rh-r">
             <span class="cl-status ${statusClass}">${statusLabel}</span>

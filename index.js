@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '100';
+const APP_VERSION = '101';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -112,6 +112,10 @@ async function ensureSchema() {
       submitted_at TIMESTAMPTZ,
       created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
+  // The assignee taps "Start" when they begin; we stamp started_at then. The
+  // manager-only timer is submitted_at - started_at. Added later → ALTER for
+  // existing DBs (older runs have NULL started_at and just show no timer).
+  await pool.query(`ALTER TABLE checklist_runs ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS checklist_items (
       id         SERIAL PRIMARY KEY,
@@ -1494,6 +1498,8 @@ async function checklistSummary(who) {
 async function runsWithItems(limit) {
   const { rows: runs } = await pool.query(`
     SELECT r.id, to_char(r.run_date, 'YYYY-MM-DD') AS run_date, r.status, r.submitted_at,
+           r.started_at,
+           EXTRACT(EPOCH FROM (r.submitted_at - r.started_at))::int AS duration_secs,
            e.name AS assignee
       FROM checklist_runs r LEFT JOIN employees e ON e.id = r.employee_id
      ORDER BY r.run_date DESC LIMIT $1`, [limit]);
@@ -1518,7 +1524,10 @@ async function getChecklist(who) {
   const run = await ensureTodayRun();
   const today = await todayStr();
   const recent = await runsWithItems(15);
-  const history = recent.filter(r => r.run_date !== today);   // past days only
+  // The timer (started_at / duration) is manager-only — strip it from the
+  // employee-facing history so it's never exposed to employees.
+  const stripTiming = ({ started_at, duration_secs, ...rest }) => rest;
+  const history = recent.filter(r => r.run_date !== today).map(stripTiming);   // past days only
   if (!run) {
     return { date: today, today, assignee: null, status: null, mine: false, items: [], history };
   }
@@ -1528,9 +1537,23 @@ async function getChecklist(who) {
     date: today, today, assignee, status: run.status,
     mine: who.role === 'employee' && assignee === who.name,
     submittedAt: run.submitted_at,
+    started: !!run.started_at,     // has the assignee tapped "Start"? (drives the start prompt)
     items: todayRow ? todayRow.items : [],
     history,
   };
+}
+
+// The assigned worker taps "Start" when they begin — stamps started_at once so
+// the manager-only timer can measure how long closing took.
+async function startChecklist(who) {
+  if (!who || who.role !== 'employee') return { error: 'Only the assigned worker can start' };
+  const run = await ensureTodayRun();
+  if (!run) return { error: 'No checklist today' };
+  const assignee = await nameForEmpId(run.employee_id);
+  if (assignee !== who.name) return { error: 'It is not your turn today' };
+  if (run.status === 'completed') return { error: 'Already submitted' };
+  await pool.query('UPDATE checklist_runs SET started_at = now() WHERE id = $1 AND started_at IS NULL', [run.id]);
+  return { ok: true };
 }
 
 // The assigned worker submits. All boxes must be checked (enforced here too).
@@ -3007,6 +3030,7 @@ app.post('/', async (req, res) => {
         case 'denyAdmin':         out = await denyAdmin(who, body.id); break;
         // ----- End-of-day checklist -----
         case 'getChecklist':         out = await getChecklist(who); break;
+        case 'startChecklist':       out = await startChecklist(who); break;
         case 'submitChecklist':      out = await submitChecklist(who); break;
         case 'getChecklistAdmin':    out = await getChecklistAdmin(who); break;
         case 'flagChecklistItem':    out = await flagChecklistItem(who, body); break;
