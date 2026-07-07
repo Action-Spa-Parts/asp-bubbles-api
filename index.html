@@ -845,6 +845,9 @@
   .cl-arow .cl-abtns { display:flex; gap:6px; flex-shrink:0; }
   .cl-arow .cl-abtns button { font-size:11px; padding:4px 9px; border-radius:6px; }
   .cl-arow.flagged .cl-amain { color:var(--danger); }
+  .cl-arow .cl-itime { font-size:11px; color:var(--muted); margin-top:3px; font-variant-numeric:tabular-nums; }
+  .cl-item.locked { opacity:0.45; }
+  .cl-item .cl-lock { margin-left:auto; font-size:14px; }
   .cl-acat { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
   .cl-reassign { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:4px 0 10px; padding:8px 10px; background:var(--bg); border:1px dashed var(--border); border-radius:8px; }
   .cl-reassign label { font-size:12px; font-weight:600; color:var(--muted); }
@@ -1006,7 +1009,7 @@
       <button class="app-tile" id="tileBubbles">
         <span class="tile-icon"><img src="bubbles-icon.png" alt=""></span>
         <span class="tile-body">
-          <span class="tile-name">Bubbles</span>
+          <span class="tile-name">Bubbles<span class="turn-badge" id="bubblesAlertBadge" hidden>redeem</span></span>
           <span class="tile-desc">Rewards &amp; leaderboard</span>
         </span>
         <span class="tile-arrow">›</span>
@@ -2416,6 +2419,21 @@ function render() {
   renderActivity();
   renderEarn();
   updateChecklistNav();
+  updateBubblesNav();
+}
+
+// Managers: light up the Bubbles tile + Rewards tab red when there are reward
+// redemptions waiting (pending approval or approved and ready to hand out).
+function updateBubblesNav() {
+  const isMgr = session.role === "manager";
+  const waiting = isMgr ? ((state.pending || []).length + (state.approved || []).length) : 0;
+  const need = waiting > 0;
+  const tile = $("tileBubbles");
+  if (tile) tile.classList.toggle("alert", need);
+  const badge = $("bubblesAlertBadge");
+  if (badge) badge.hidden = !need;
+  const rewardsTab = document.querySelector('.bottomnav .navbtn[data-view="rewards"]');
+  if (rewardsTab) rewardsTab.classList.toggle("alert", need);
 }
 
 // Top-level app screen switch: "home" | "bubbles" | "checklist".
@@ -3841,23 +3859,32 @@ function renderChecklistEmployee() {
     html += `<div class="cl-submitbar"><button class="primary" id="clStartBtn">▶ Start closing checklist</button></div>`;
   } else {
     interactive = true;
-    const groups = groupByCategory(c.items);
-    html = `<div class="cl-banner">It's your turn to close up. Check off each task — every box must be ticked before you can submit.<br><br><strong>⚠️ Bubbles can be taken away if you don't complete the checklist, or if you check something off that wasn't actually done.</strong></div>`;
+    const items = c.items || [];
+    const idxById = new Map(items.map((it, i) => [it.id, i]));
+    const firstUnchecked = items.findIndex(it => !it.checked);
+    const allChecked = firstUnchecked === -1 && items.length > 0;
+    const activeIdx = allChecked ? -1 : firstUnchecked;                  // next one to tick
+    const undoIdx = allChecked ? items.length - 1 : firstUnchecked - 1;  // last ticked (can undo)
+    const groups = groupByCategory(items);
+    html = `<div class="cl-banner">It's your turn to close up. Do the tasks <strong>in order</strong> and tick each one as you finish it — the next unlocks after the one above.<br><br><strong>⚠️ Bubbles can be taken away if you don't complete the checklist, or if you check something off that wasn't actually done.</strong></div>`;
     html += groups.map(g => `
       <div class="cl-cat">
         <div class="ctitle">${escapeHtml(g.category)}</div>
         ${g.items.map(it => {
-          const on = !!state.checkLocal[it.id];
-          return `<label class="cl-item tappable ${on ? "checked" : ""}">
-            <input type="checkbox" ${on ? "checked" : ""} data-cb="${it.id}">
+          const gi = idxById.get(it.id);
+          const on = !!it.checked;
+          const enabled = (gi === activeIdx) || (gi === undoIdx && undoIdx >= 0);
+          const locked = !enabled && !on;
+          return `<label class="cl-item ${on ? "checked " : ""}${enabled ? "tappable" : (locked ? "locked" : "")}">
+            <input type="checkbox" ${on ? "checked" : ""} ${enabled ? "" : "disabled"} data-cb="${it.id}">
             <span class="cl-label">${escapeHtml(it.label)}</span>
+            ${locked ? `<span class="cl-lock">🔒</span>` : ""}
           </label>`;
         }).join("")}
       </div>`).join("");
-    const total = c.items.length;
-    const done = c.items.filter(it => state.checkLocal[it.id]).length;
-    const allChecked = total > 0 && done === total;
-    html += `<div class="cl-submitbar"><button class="primary" id="clSubmitBtn" ${allChecked ? "" : "disabled"}>${allChecked ? "Submit checklist" : "Check all to submit (" + done + "/" + total + ")"}</button></div>`;
+    const total = items.length;
+    const done = items.filter(it => it.checked).length;
+    html += `<div class="cl-submitbar"><button class="primary" id="clSubmitBtn" ${allChecked ? "" : "disabled"}>${allChecked ? "Submit checklist" : "Complete each task in order (" + done + "/" + total + ")"}</button></div>`;
   }
 
   // Read-only history of past checklists — visible to everyone.
@@ -3872,9 +3899,20 @@ function renderChecklistEmployee() {
 
   if (interactive) {
     body.querySelectorAll("input[data-cb]").forEach(cb => {
-      cb.addEventListener("change", () => {
-        state.checkLocal[parseInt(cb.dataset.cb, 10)] = cb.checked;
-        renderChecklistEmployee();
+      cb.addEventListener("change", async () => {
+        const id = parseInt(cb.dataset.cb, 10);
+        const want = cb.checked;
+        cb.disabled = true;
+        try {
+          const res = await apiCall("checkChecklistItem", { pin: session.pin, itemId: id, checked: want });
+          if (res && res.error) { alert(res.error); renderChecklistEmployee(); return; }
+          const it = (state.checklistFull.items || []).find(x => x.id === id);
+          if (it) it.checked = want;
+          renderChecklistEmployee();
+        } catch (err) {
+          alert("Error: " + (err && err.message ? err.message : err));
+          renderChecklistEmployee();
+        }
       });
     });
     const sb = $("clSubmitBtn");
@@ -3911,7 +3949,7 @@ async function submitChecklistNow() {
   const c = state.checklistFull;
   if (!c) return;
   const total = c.items.length;
-  const done = c.items.filter(it => state.checkLocal[it.id]).length;
+  const done = c.items.filter(it => it.checked).length;
   if (done !== total) return;
   const btn = $("clSubmitBtn"); if (btn) { btn.disabled = true; btn.textContent = "Submitting…"; }
   try {
@@ -3971,6 +4009,13 @@ function fmtChecklistDuration(r) {
   return "";
 }
 
+function fmtClockTime(d) { return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }
+function fmtGap(secs) {
+  secs = Math.max(0, Math.round(secs));
+  const m = Math.floor(secs / 60), s = secs % 60;
+  return m ? (m + "m " + String(s).padStart(2, "0") + "s") : (s + "s");
+}
+
 function runCardsHtml(runs, today, opts) {
   opts = opts || {};
   const interactive = !!opts.interactive;
@@ -3981,6 +4026,18 @@ function runCardsHtml(runs, today, opts) {
     const flaggedCount = r.items.filter(it => it.flagged).length;
     const checkedCount = r.items.filter(it => it.checked).length;
     const durLabel = fmtChecklistDuration(r);   // manager-only; employee payload has no timing data
+    // Per-item pacing (manager only): how long they spent on each box. The first
+    // box is measured from when they tapped Start; each later box from the tick
+    // before it.
+    const checkedSeq = r.items.filter(it => it.checked_at).slice()
+      .sort((a, b) => new Date(a.checked_at) - new Date(b.checked_at));
+    const paceById = {};
+    checkedSeq.forEach((it, k) => {
+      const t = new Date(it.checked_at);
+      const prev = k > 0 ? new Date(checkedSeq[k - 1].checked_at)
+                         : (r.started_at ? new Date(r.started_at) : null);
+      paceById[it.id] = { t, spent: prev ? (t - prev) / 1000 : null };
+    });
     const open = false;   // collapsed by default — click the header to expand
     return `
       <div class="cl-run">
@@ -4004,6 +4061,7 @@ function runCardsHtml(runs, today, opts) {
                 <input type="checkbox" class="cl-acheck" ${it.checked ? "checked" : ""} ${interactive && checkMode ? `data-correct="${it.id}" title="Tick/untick to correct"` : "disabled"}>
                 <div class="cl-amain">
                   ${escapeHtml(it.label)}
+                  ${paceById[it.id] ? `<div class="cl-itime">🕒 ${paceById[it.id].spent != null ? "spent " + fmtGap(paceById[it.id].spent) + " · " : ""}ticked ${fmtClockTime(paceById[it.id].t)}</div>` : ""}
                   ${it.flagged ? `<div class="cl-flagnote">⚑ ${escapeHtml(it.flag_note || "Flagged")}${it.flagged_by ? " — " + escapeHtml(it.flagged_by) : ""}</div>` : ""}
                 </div>
                 ${interactive ? `<div class="cl-abtns">${it.flagged ? `<button class="ghost" data-unflag="${it.id}">Unflag</button>` : `<button class="ghost" data-flag="${it.id}" data-label="${escapeAttr(it.label)}">Flag</button>`}</div>` : ""}

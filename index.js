@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '105';
+const APP_VERSION = '106';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -131,6 +131,9 @@ async function ensureSchema() {
       flagged_at TIMESTAMPTZ
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS checklist_items_run_idx ON checklist_items(run_id)`);
+  // When each box is ticked we stamp checked_at, so the manager can see the time
+  // between checks (pacing). Added later → ALTER for existing DBs.
+  await pool.query(`ALTER TABLE checklist_items ADD COLUMN IF NOT EXISTS checked_at TIMESTAMPTZ`);
 
   // Seed the standard tasks once (only if the table is empty). Ordered by the
   // real closing flow: restock → clean up → power down → climate → lock up →
@@ -1667,7 +1670,7 @@ async function runsWithItems(limit) {
   const byRun = {};
   if (ids.length) {
     const { rows: items } = await pool.query(`
-      SELECT id, run_id, category, label, checked, flagged, flag_note, flagged_by
+      SELECT id, run_id, category, label, checked, checked_at, flagged, flag_note, flagged_by
         FROM checklist_items WHERE run_id = ANY($1) ORDER BY sort_order, id`, [ids]);
     items.forEach(it => { (byRun[it.run_id] = byRun[it.run_id] || []).push(it); });
   }
@@ -1684,9 +1687,11 @@ async function getChecklist(who) {
   const run = await ensureTodayRun();
   const today = await todayStr();
   const recent = await runsWithItems(15);
-  // The timer (started_at / duration) is manager-only — strip it from the
-  // employee-facing history so it's never exposed to employees.
-  const stripTiming = ({ started_at, duration_secs, ...rest }) => rest;
+  // The timer (started_at / duration / per-item checked_at) is manager-only —
+  // strip it from the employee-facing payload so it's never exposed to employees.
+  const stripItemTiming = its => (its || []).map(({ checked_at, ...i }) => i);
+  const stripTiming = ({ started_at, duration_secs, items, ...rest }) =>
+    ({ ...rest, items: stripItemTiming(items) });
   const history = recent.filter(r => r.run_date !== today).map(stripTiming);   // past days only
   if (!run) {
     return { date: today, today, assignee: null, status: null, mine: false, items: [], history };
@@ -1698,7 +1703,7 @@ async function getChecklist(who) {
     mine: who.role === 'employee' && assignee === who.name,
     submittedAt: run.submitted_at,
     started: !!run.started_at,     // has the assignee tapped "Start"? (drives the start prompt)
-    items: todayRow ? todayRow.items : [],
+    items: todayRow ? stripItemTiming(todayRow.items) : [],
     history,
   };
 }
@@ -1727,6 +1732,49 @@ async function submitChecklist(who) {
   await pool.query('UPDATE checklist_items SET checked = true WHERE run_id = $1', [run.id]);
   await pool.query(`UPDATE checklist_runs SET status = 'completed', submitted_at = now() WHERE id = $1`, [run.id]);
   return { ok: true };
+}
+
+// The assignee ticks one item. Enforces sequential order (can't check ahead) and
+// stamps checked_at so the manager can see the time between checks.
+async function checkChecklistItem(who, itemId, checked) {
+  if (!who || who.role !== 'employee') return { error: 'Only the assigned worker can check items' };
+  const iid = cleanInt(itemId);
+  if (iid === null) return { error: 'Bad item id' };
+  const run = await ensureTodayRun();
+  if (!run) return { error: 'No checklist today' };
+  const assignee = await nameForEmpId(run.employee_id);
+  if (assignee !== who.name) return { error: 'It is not your turn today' };
+  if (run.status === 'completed') return { error: 'Already submitted' };
+  if (!run.started_at) return { error: 'Tap Start first.' };
+
+  const { rows: itRows } = await pool.query(
+    'SELECT id, sort_order FROM checklist_items WHERE id = $1 AND run_id = $2', [iid, run.id]);
+  if (!itRows.length) return { error: 'Item not found' };
+  const item = itRows[0];
+
+  if (checked) {
+    // Every earlier item (by sort_order, id) must already be checked.
+    const { rows: before } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM checklist_items
+        WHERE run_id = $1 AND checked = false
+          AND (sort_order < $2 OR (sort_order = $2 AND id < $3))`,
+      [run.id, item.sort_order, item.id]);
+    if (before[0].n > 0) return { error: 'Please do the tasks in order — finish the one above first.' };
+    await pool.query('UPDATE checklist_items SET checked = true, checked_at = now() WHERE id = $1', [iid]);
+  } else {
+    // Only the most recent check may be undone (nothing checked after it).
+    const { rows: after } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM checklist_items
+        WHERE run_id = $1 AND checked = true
+          AND (sort_order > $2 OR (sort_order = $2 AND id > $3))`,
+      [run.id, item.sort_order, item.id]);
+    if (after[0].n > 0) return { error: 'You can only undo the most recent check.' };
+    await pool.query('UPDATE checklist_items SET checked = false, checked_at = NULL WHERE id = $1', [iid]);
+  }
+  const { rows: cnt } = await pool.query(
+    `SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE checked)::int AS done
+       FROM checklist_items WHERE run_id = $1`, [run.id]);
+  return { ok: true, total: cnt[0].total, done: cnt[0].done };
 }
 
 // Read-only view of the current rotation cycle, in order, marking who has gone
@@ -3194,6 +3242,7 @@ app.post('/', async (req, res) => {
         // ----- End-of-day checklist -----
         case 'getChecklist':         out = await getChecklist(who); break;
         case 'startChecklist':       out = await startChecklist(who); break;
+        case 'checkChecklistItem':   out = await checkChecklistItem(who, body.itemId, body.checked); break;
         case 'submitChecklist':      out = await submitChecklist(who); break;
         case 'getChecklistAdmin':    out = await getChecklistAdmin(who); break;
         case 'flagChecklistItem':    out = await flagChecklistItem(who, body); break;
