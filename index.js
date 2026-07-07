@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '102';
+const APP_VERSION = '103';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -279,6 +279,22 @@ async function ensureSchema() {
       cycle_start DATE
     )`);
   await pool.query(`INSERT INTO checklist_rotation (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+
+  // Morning-meeting credit: someone taps "I led the morning meeting" on the TV,
+  // enters their PIN → a pending row here; a manager approves it in the app,
+  // which awards bubbles under the existing "Morning Meeting" rule.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS meeting_credits (
+      id            SERIAL PRIMARY KEY,
+      employee_id   INTEGER REFERENCES employees(id) ON DELETE CASCADE,
+      employee_name TEXT NOT NULL DEFAULT '',
+      meeting_date  DATE NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied')),
+      amount        INTEGER,
+      requested_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      resolved_at   TIMESTAMPTZ,
+      resolved_by   TEXT
+    )`);
 
   // One-time data migrations (guarded so a later manager change isn't reverted).
   await pool.query(`
@@ -774,6 +790,12 @@ async function getData(who) {
 
   const checklist = await checklistSummary(who);
 
+  const meetingPending = isManager
+    ? (await pool.query(
+        `SELECT id AS "_row", employee_name AS "Name", to_char(meeting_date, 'YYYY-MM-DD') AS "Date"
+           FROM meeting_credits WHERE status = 'pending' ORDER BY requested_at`)).rows
+    : [];
+
   return {
     role: who.role,
     name: who.name,
@@ -784,6 +806,7 @@ async function getData(who) {
     myRequests: myReq.rows,
     pending: pending.rows,
     approved: approved.rows,
+    meetingPending,
     allAwards: allAwards.rows,
     checklist,
     version: APP_VERSION,
@@ -1090,6 +1113,78 @@ async function fulfillRedemption(who, redemptionId) {
     `Hi ${employee_name},\n\nYour reward "${reward_name}" has been handed out. Enjoy!\n\n— Action Spa Parts`);
 
   return { ok: true };
+}
+
+// The "Morning Meeting" earn rule (amount + exact label). Falls back to +5 /
+// "Morning Meeting" if a manager hasn't set one up.
+async function morningMeetingRule() {
+  const { rows } = await pool.query(
+    `SELECT metric, bubbles FROM rules
+      WHERE active = true AND metric ILIKE '%morning meeting%' ORDER BY id LIMIT 1`);
+  if (rows.length) return { metric: rows[0].metric, amount: Number(rows[0].bubbles) };
+  return { metric: 'Morning Meeting', amount: 5 };
+}
+
+// Someone taps "I led the morning meeting" on the TV and enters their PIN.
+// Creates a pending credit for a manager to approve. One claim per person/day.
+async function requestMeetingCredit(who) {
+  if (!who || who.role !== 'employee') return { error: 'Enter your personal PIN to claim the credit.' };
+  const { rows: emp } = await pool.query('SELECT id FROM employees WHERE name = $1 AND active = true', [who.name]);
+  if (!emp.length) return { error: 'Employee not found.' };
+  const empId = emp[0].id;
+  const today = (await pool.query(`SELECT to_char(${BIZ_DATE}, 'YYYY-MM-DD') AS d`)).rows[0].d;
+  const dup = await pool.query(
+    `SELECT 1 FROM meeting_credits WHERE employee_id = $1 AND meeting_date = $2 AND status IN ('pending','approved')`,
+    [empId, today]);
+  if (dup.rows.length) return { error: "You've already claimed the morning meeting today." };
+  await pool.query(
+    `INSERT INTO meeting_credits (employee_id, employee_name, meeting_date) VALUES ($1, $2, $3)`,
+    [empId, who.name, today]);
+  await notifyManager(
+    'Morning meeting credit to approve',
+    `${who.name} says they led the morning meeting today.\nOpen the app to approve or deny it.\n\n— Action Spa Parts`);
+  return { ok: true };
+}
+
+// Manager approves/denies a pending morning-meeting credit. Approve → award the
+// Morning Meeting rule's bubbles under that metric.
+async function resolveMeetingCredit(who, id, approve) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT id, employee_id, employee_name, status FROM meeting_credits WHERE id = $1 FOR UPDATE`,
+      [Number(id)]);
+    if (!rows.length) { await client.query('ROLLBACK'); return { error: 'Bad row' }; }
+    if (rows[0].status !== 'pending') { await client.query('ROLLBACK'); return { error: 'Already resolved' }; }
+    const r = rows[0];
+    if (approve) {
+      const rule = await morningMeetingRule();
+      await client.query(
+        `INSERT INTO awards (employee_id, metric, amount, awarded_by, note)
+         VALUES ($1, $2, $3, $4, 'Morning meeting (approved)')`,
+        [r.employee_id, rule.metric, rule.amount, who.name]);
+      await client.query(
+        `UPDATE meeting_credits SET status = 'approved', amount = $2, resolved_at = now(), resolved_by = $3 WHERE id = $1`,
+        [r.id, rule.amount, who.name]);
+      await client.query('COMMIT');
+      const bal = await balanceFor(r.employee_name);
+      await notifyEmployee(r.employee_name, `You earned ${rule.amount} bubbles!`,
+        `Hi ${r.employee_name},\n\nYour morning-meeting credit was approved — ${rule.amount} bubbles for leading it.\nYour balance is now ${bal} bubbles.\n\n— Action Spa Parts`);
+    } else {
+      await client.query(
+        `UPDATE meeting_credits SET status = 'denied', resolved_at = now(), resolved_by = $2 WHERE id = $1`,
+        [r.id, who.name]);
+      await client.query('COMMIT');
+    }
+    return { ok: true };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 // =================================================================
@@ -3062,6 +3157,8 @@ app.post('/', async (req, res) => {
         case 'request':   out = await requestRedemption(who, body.reward); break;
         case 'resolve':   out = await resolveRedemption(who, body.row, body.approve); break;
         case 'fulfill':   out = await fulfillRedemption(who, body.row); break;
+        case 'requestMeetingCredit': out = await requestMeetingCredit(who); break;
+        case 'resolveMeetingCredit': out = await resolveMeetingCredit(who, body.id, body.approve); break;
         // ----- Admin (manager only) -----
         case 'getAdmin':          out = await getAdmin(who); break;
         case 'addRule':           out = await addRule(who, body.rule); break;

@@ -197,6 +197,23 @@
   .tv-homebtn:hover { background: var(--accent-soft); }
   .tv-signin { font: inherit; font-size: 20px; font-weight: 700; color: #fff; background: var(--accent); border: none; border-radius: 12px; padding: 12px 24px; cursor: pointer; box-shadow: var(--shadow-card); }
   .tv-signin:hover { filter: brightness(1.08); }
+  .tv-mmbtn { font: inherit; font-size: 20px; font-weight: 800; color: #fff; background: var(--good); border: none; border-radius: 12px; padding: 12px 24px; cursor: pointer; box-shadow: var(--shadow-card); margin-left: auto; }
+  .tv-mmbtn:hover { filter: brightness(1.08); }
+
+  /* Morning-meeting PIN pad */
+  .mm-overlay { position: fixed; inset: 0; z-index: 50; background: rgba(15,23,42,0.55); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; }
+  .mm-overlay[hidden] { display: none; }
+  .mm-card { background: var(--surface); border-radius: 24px; box-shadow: 0 24px 60px rgba(0,0,0,0.3); padding: 36px 40px; width: 420px; max-width: 92vw; text-align: center; }
+  .mm-card .mm-h { font-size: 28px; font-weight: 800; }
+  .mm-card .mm-p { color: var(--muted); font-size: 17px; margin-top: 8px; }
+  .mm-dots { height: 28px; margin: 22px 0 6px; font-size: 34px; letter-spacing: 10px; font-weight: 800; color: var(--accent); min-height: 40px; }
+  .mm-msg { min-height: 24px; font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+  .mm-msg.ok { color: var(--good); } .mm-msg.err { color: var(--danger); }
+  .mm-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .mm-pad button { font: inherit; font-size: 26px; font-weight: 700; padding: 18px 0; border: 1px solid var(--border); border-radius: 14px; background: var(--bg); color: var(--text); cursor: pointer; }
+  .mm-pad button:hover { background: var(--accent-soft); }
+  .mm-pad .mm-ok { background: var(--good); color: #fff; border: none; }
+  .mm-cancel { margin-top: 18px; font: inherit; font-size: 18px; font-weight: 600; color: var(--muted); background: none; border: none; cursor: pointer; }
   .tv-ver { color: var(--muted); font-size: 13px; margin-top: 4px; }
   .tv-home { max-width: 1000px; margin: 0 auto; text-align: center; padding-top: 40px; }
   .tv-herologo { width: 104px; height: 104px; border-radius: 26px; box-shadow: var(--shadow-card); }
@@ -256,6 +273,7 @@
       </div>
     </div>
     <button class="tv-homebtn" id="tvHome" hidden>⌂ Home</button>
+    <button class="tv-mmbtn" id="tvMeetingBtn">🙋 I led the morning meeting</button>
     <button class="tv-signin" id="tvSignin">Sign in to make changes</button>
     <div class="meta">
       <div class="clock" id="clock">—</div>
@@ -354,6 +372,23 @@
     <button class="tab" data-view="activity"><span class="ticon">🧾</span><span>Activity</span></button>
     <button class="tab" data-view="earn"><span class="ticon">＋</span><span>How to earn</span></button>
   </nav>
+
+  <!-- Morning-meeting credit: enter PIN → request manager approval -->
+  <div class="mm-overlay" id="mmModal" hidden>
+    <div class="mm-card">
+      <div class="mm-h">🙋 Morning meeting credit</div>
+      <div class="mm-p">Enter your PIN to claim it. A manager approves it in the app.</div>
+      <div class="mm-dots" id="mmDots"></div>
+      <div class="mm-msg" id="mmMsg"></div>
+      <div class="mm-pad" id="mmPad">
+        <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+        <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+        <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+        <button data-k="back">⌫</button><button data-k="0">0</button><button data-k="ok" class="mm-ok">Claim</button>
+      </div>
+      <button class="mm-cancel" id="mmCancel">Cancel</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -666,6 +701,40 @@ $("tileResources").addEventListener("click", () => showScreen("resources"));
 // Leave the read-only TV and open the full app (which shows its normal login),
 // so someone can request/edit right on the big screen.
 $("tvSignin").addEventListener("click", () => { window.location.href = "/"; });
+
+/* ===== Morning meeting credit (PIN pad) ===== */
+let mmPin = "";
+function mmRender() { $("mmDots").textContent = "•".repeat(mmPin.length); }
+function mmOpen() {
+  mmPin = ""; mmRender();
+  const m = $("mmMsg"); m.textContent = ""; m.className = "mm-msg";
+  $("mmModal").hidden = false;
+}
+function mmClose() { $("mmModal").hidden = true; }
+async function mmSubmit() {
+  const m = $("mmMsg");
+  if (mmPin.length < 3) { m.textContent = "Enter your PIN."; m.className = "mm-msg err"; return; }
+  m.textContent = "Sending…"; m.className = "mm-msg";
+  try {
+    const res = await apiCall("requestMeetingCredit", { pin: mmPin });
+    if (res && res.error) { m.textContent = res.error; m.className = "mm-msg err"; mmPin = ""; mmRender(); return; }
+    m.textContent = "✓ Sent to managers for approval!"; m.className = "mm-msg ok";
+    mmPin = ""; mmRender();
+    setTimeout(mmClose, 1900);
+  } catch (err) {
+    m.textContent = "Network error — try again."; m.className = "mm-msg err";
+  }
+}
+$("tvMeetingBtn").addEventListener("click", mmOpen);
+$("mmCancel").addEventListener("click", mmClose);
+$("mmModal").addEventListener("click", (e) => { if (e.target === $("mmModal")) mmClose(); });
+$("mmPad").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  const k = b.dataset.k;
+  if (k === "ok") return mmSubmit();
+  if (k === "back") { mmPin = mmPin.slice(0, -1); mmRender(); return; }
+  if (/^[0-9]$/.test(k) && mmPin.length < 10) { mmPin += k; mmRender(); }
+});
 document.querySelectorAll("[data-bcsearch]").forEach(inp => inp.addEventListener("input", () => {
   const v = inp.value.replace(/[^0-9]/g, "");
   if (v !== inp.value) inp.value = v;

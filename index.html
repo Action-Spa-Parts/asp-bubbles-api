@@ -1094,6 +1094,10 @@
       <h2 class="section">Pending requests</h2>
       <div id="pendingList"></div>
     </div>
+    <div id="mmPendingSection" hidden>
+      <h2 class="section">Morning meeting credits to approve</h2>
+      <div id="mmPendingList"></div>
+    </div>
     <div id="fulfillSection" hidden>
       <h2 class="section">Ready to hand out</h2>
       <div id="fulfillList"></div>
@@ -1774,6 +1778,7 @@ const state = {
   myRequests: [],   // this user's redemption requests
   pending: [],      // manager: all pending requests
   approved: [],     // manager: approved, awaiting hand-out
+  meetingPending: [], // manager: pending morning-meeting credits
   search: "",
   activeIdx: null,  // index of employee in dialog
   screen: "home",   // home | bubbles | checklist (top-level app screen)
@@ -2022,6 +2027,29 @@ function renderRewards() {
     pendSec.hidden = true;
   }
 
+  // --- Manager: pending morning-meeting credits ---
+  const mmSec = $("mmPendingSection");
+  if (isManager && (state.meetingPending || []).length) {
+    mmSec.hidden = false;
+    $("mmPendingList").innerHTML = state.meetingPending.map(p => `
+      <div class="req-row">
+        <div>
+          <strong>${escapeHtml(p.Name)}</strong> led the morning meeting
+          <span class="muted">(${escapeHtml(p.Date || "")})</span>
+        </div>
+        <div class="req-actions">
+          <button class="approve" data-row="${p._row}" data-approve="1">Approve</button>
+          <button class="deny" data-row="${p._row}" data-approve="0">Deny</button>
+        </div>
+      </div>
+    `).join("");
+    $("mmPendingList").querySelectorAll("button").forEach(b => {
+      b.addEventListener("click", () => resolveMeetingCreditReq(b.dataset.row, b.dataset.approve === "1"));
+    });
+  } else {
+    mmSec.hidden = true;
+  }
+
   // --- Manager: approved, ready to hand out ---
   const fulSec = $("fulfillSection");
   if (isManager && state.approved.length) {
@@ -2134,6 +2162,17 @@ async function resolveRequest(row, approve) {
   try {
     const res = await apiCall("resolve", { pin: session.pin, row: row, approve: approve });
     if (res.error) { setStatus(res.error, "error"); }
+    fetchData();
+  } catch (err) {
+    setStatus("Error: " + (err && err.message ? err.message : err), "error");
+  }
+}
+
+async function resolveMeetingCreditReq(id, approve) {
+  try {
+    const res = await apiCall("resolveMeetingCredit", { pin: session.pin, id: id, approve: approve });
+    if (res.error) { setStatus(res.error, "error"); }
+    else setStatus(approve ? "Morning-meeting credit approved." : "Request denied.", "ok");
     fetchData();
   } catch (err) {
     setStatus("Error: " + (err && err.message ? err.message : err), "error");
@@ -4614,6 +4653,7 @@ function applyData(data) {
   state.myRequests = data.myRequests || [];
   state.pending    = data.pending || [];
   state.approved   = data.approved || [];
+  state.meetingPending = data.meetingPending || [];
   state.checklist = data.checklist || null;
   if (data.role) session.role = data.role;
   if (data.name) session.name = data.name;
