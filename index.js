@@ -132,28 +132,32 @@ async function ensureSchema() {
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS checklist_items_run_idx ON checklist_items(run_id)`);
 
-  // Seed the standard 16 tasks once (only if the table is empty).
+  // Seed the standard tasks once (only if the table is empty). Ordered by the
+  // real closing flow: restock → clean up → power down → climate → lock up →
+  // (separate) tablet-on-charger last. Existing DBs are reordered by the
+  // 'checklist_phase_reorder_v1' migration below.
   const { rows: tc } = await pool.query('SELECT COUNT(*)::int AS n FROM checklist_tasks');
   if (tc[0].n === 0) {
     await pool.query(`
       INSERT INTO checklist_tasks (category, label, sort_order) VALUES
-        ('Printers & Supplies', 'Refill all printer paper trays (label, packing slip, and document printers).', 10),
-        ('Printers & Supplies', 'Replace any low or empty toner / ink and set out spares if needed.', 20),
-        ('Printers & Supplies', 'Restock packing tape, labels, and shipping supplies at each station.', 30),
-        ('Climate Control', 'All fans are turned OFF.', 40),
-        ('Climate Control', 'All A/C units are turned OFF.', 50),
-        ('Climate Control', 'Heaters / space heaters are turned OFF (if applicable).', 60),
-        ('Equipment & Power', 'Forklifts / pallet jacks parked and plugged in to charge.', 70),
-        ('Equipment & Power', 'Scanners and handheld devices placed on chargers.', 80),
-        ('Equipment & Power', 'Computers / monitors at workstations shut down or locked.', 90),
-        ('Housekeeping', 'Aisles and walkways clear; pallets and carts put away.', 100),
-        ('Housekeeping', 'Trash and cardboard removed; recycling emptied.', 110),
-        ('Housekeeping', 'Workstations wiped down and organized for the next shift.', 120),
-        ('Building & Security', 'All gates are CLOSED and locked.', 130),
-        ('Building & Security', 'All overhead / dock doors are CLOSED and secured.', 140),
-        ('Building & Security', 'All exterior and interior LIGHTS are turned OFF.', 150),
-        ('Building & Security', 'All entry doors locked.', 160)`);
-    console.log('Schema: seeded 16 checklist tasks.');
+        ('Restock for Tomorrow', 'Restock packing tape, labels, and shipping supplies at each station.', 10),
+        ('Restock for Tomorrow', 'Refill all printer paper trays (label, packing slip, and document printers).', 20),
+        ('Restock for Tomorrow', 'Replace any low or empty toner / ink and set out spares if needed.', 30),
+        ('Clean Up', 'Aisles and walkways clear; pallets and carts put away.', 40),
+        ('Clean Up', 'Trash and cardboard removed; recycling emptied.', 50),
+        ('Clean Up', 'Workstations wiped down and organized for the next shift.', 60),
+        ('Park & Power Down', 'Forklifts / pallet jacks parked and plugged in to charge.', 70),
+        ('Park & Power Down', 'Scanners and handheld devices placed on chargers.', 80),
+        ('Park & Power Down', 'Computers / monitors at workstations shut down or locked.', 90),
+        ('Climate Off', 'All fans are turned OFF.', 100),
+        ('Climate Off', 'All A/C units are turned OFF.', 110),
+        ('Climate Off', 'Heaters / space heaters are turned OFF (if applicable).', 120),
+        ('Lock Up & Leave', 'All gates are CLOSED and locked.', 130),
+        ('Lock Up & Leave', 'All overhead / dock doors are CLOSED and secured.', 140),
+        ('Lock Up & Leave', 'All entry doors locked.', 150),
+        ('Lock Up & Leave', 'All exterior and interior LIGHTS are turned OFF.', 160),
+        ('Before You Leave', 'Put the checklist tablet back on its charger.', 200)`);
+    console.log('Schema: seeded 17 checklist tasks.');
   }
 
   // Box Counter: packaging box sizes with current inventory + optional per-size
@@ -322,6 +326,49 @@ async function ensureSchema() {
         console.log(`Schema: backfilled Box Counter activity (${counts.length + 1} entries).`);
       }
       await pool.query(`INSERT INTO app_migrations (name) VALUES ('box_activity_backfill_v1') ON CONFLICT DO NOTHING`);
+    }
+  }
+
+  {
+    // Reorder the closing checklist into the real closing flow + rename the
+    // category headers to phase names. Matches existing tasks by a distinctive
+    // word in the label (labels unchanged). Also re-syncs any NOT-yet-completed
+    // run (incl. today's) so the new order shows immediately; completed history
+    // keeps its original order. Guarded so a later manual edit isn't reverted.
+    const done = await pool.query(`SELECT 1 FROM app_migrations WHERE name = 'checklist_phase_reorder_v1'`);
+    if (!done.rows.length) {
+      const reorder = [
+        [10,  'Restock for Tomorrow', 'packing tape'],
+        [20,  'Restock for Tomorrow', 'printer paper'],
+        [30,  'Restock for Tomorrow', 'toner'],
+        [40,  'Clean Up',             'Aisles'],
+        [50,  'Clean Up',             'Trash and cardboard'],
+        [60,  'Clean Up',             'wiped down'],
+        [70,  'Park & Power Down',    'Forklifts'],
+        [80,  'Park & Power Down',    'Scanners and handheld'],
+        [90,  'Park & Power Down',    'Computers'],
+        [100, 'Climate Off',          'fans'],
+        [110, 'Climate Off',          'A/C'],
+        [120, 'Climate Off',          'Heaters'],
+        [130, 'Lock Up & Leave',      'gates'],
+        [140, 'Lock Up & Leave',      'overhead'],
+        [150, 'Lock Up & Leave',      'entry doors'],   // entry doors locked BEFORE lights…
+        [160, 'Lock Up & Leave',      'LIGHTS'],        // …lights OFF is the last action
+        [200, 'Before You Leave',     'tablet'],
+      ];
+      let n = 0;
+      for (const [ord, cat, sub] of reorder) {
+        const like = '%' + sub + '%';
+        const t = await pool.query(
+          'UPDATE checklist_tasks SET category = $1, sort_order = $2 WHERE label ILIKE $3', [cat, ord, like]);
+        n += t.rowCount;
+        await pool.query(
+          `UPDATE checklist_items SET category = $1, sort_order = $2
+             WHERE label ILIKE $3 AND run_id IN (SELECT id FROM checklist_runs WHERE status = 'pending')`,
+          [cat, ord, like]);
+      }
+      await pool.query(`INSERT INTO app_migrations (name) VALUES ('checklist_phase_reorder_v1') ON CONFLICT DO NOTHING`);
+      console.log(`Schema: reordered closing checklist into phases (${n} tasks matched).`);
     }
   }
 
