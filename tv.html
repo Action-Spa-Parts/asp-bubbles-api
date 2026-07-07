@@ -409,7 +409,7 @@ const REFRESH_MS = 20000;   // re-pull data every 20s
 const STALE_MS   = 70000;   // if no successful pull in this long, show "reconnecting"
 
 /* ===== State ===== */
-const state = { balances: [], rules: [], activity: [], checklist: null, boxSizes: [], resources: [], boxSearch: { l: "", w: "", h: "" }, boxSort: "default", boxView: "all", screen: "home", view: "board", lastOk: 0, loadedVersion: null };
+const state = { balances: [], rules: [], activity: [], checklist: null, boxSizes: [], resources: [], tiles: {}, boxSearch: { l: "", w: "", h: "" }, boxSort: "default", boxView: "all", screen: "home", view: "board", lastOk: 0, loadedVersion: null };
 const $ = (id) => document.getElementById(id);
 
 /* ===== Helpers ===== */
@@ -665,6 +665,13 @@ function renderResources() {
   }).join("");
 }
 
+// Hide launcher tiles the manager turned off (Settings → App tiles).
+function updateTvTiles() {
+  const t = state.tiles || {};
+  const map = { tileBubbles: "bubbles", tileChecklist: "checklist", tileBoxCounter: "boxcounter", tileResources: "resources" };
+  Object.keys(map).forEach(id => { const el = $(id); if (el) el.hidden = (t[map[id]] === false); });
+}
+
 function render() {
   renderBoard();
   renderActivity();
@@ -672,6 +679,7 @@ function render() {
   renderChecklist();
   renderBoxList();
   renderResources();
+  updateTvTiles();
   // Show who's on closing duty today, right on the home-screen tile.
   const ct = $("clTileDesc");
   if (ct) {
@@ -801,6 +809,7 @@ async function fetchData() {
     state.checklist = data.checklist || null;
     state.boxSizes = data.boxSizes || [];
     state.resources = data.resources || [];
+    state.tiles    = data.tiles || {};
     state.lastOk   = Date.now();
     // Auto-update: if a new version is live, the unattended TV just reloads itself.
     if (data.version) {

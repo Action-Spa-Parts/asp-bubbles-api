@@ -511,6 +511,12 @@
     padding:16px; margin-bottom:18px;
   }
   .admin-form .ftitle { font-weight:600; font-size:14px; margin-bottom:12px; }
+  #asec-settings .ftitle { font-weight:700; font-size:17px; }
+  .sset { margin-bottom:20px; padding-bottom:16px; border-bottom:1px solid var(--border); }
+  .sset:last-of-type { border-bottom:none; }
+  .ftitle2 { font-weight:700; font-size:15px; }
+  .sset-days { display:flex; flex-wrap:wrap; gap:10px 18px; }
+  .sset-day { display:flex; align-items:center; gap:6px; font-size:14px; }
   .admin-form .field { display:flex; flex-direction:column; gap:5px; margin-bottom:11px; }
   .admin-form .field label { font-size:12px; color:var(--muted); font-weight:500; }
   .admin-form .field input, .admin-form .field select { width:100%; min-width:0; }
@@ -1518,6 +1524,7 @@
         <button class="atab" data-atab="label">Label Printer</button>
         <button class="atab" data-atab="notify">Notifications</button>
         <button class="atab" data-atab="eom">Emp. of Month</button>
+        <button class="atab" data-atab="settings">Settings</button>
       </div>
       <div id="adminError" style="display:none; background:var(--danger-soft); border:1px solid #fecaca; color:#7f1d1d; border-radius:8px; padding:8px 12px; font-size:13px; margin-bottom:12px;"></div>
 
@@ -1687,6 +1694,9 @@
 
       <!-- Employee of the Month — edit votes + pick a tie-breaking winner (JS-rendered) -->
       <div class="asec" id="asec-eom" hidden></div>
+
+      <!-- Settings — manager PIN, alert email, closing/count days, app tiles (JS-rendered) -->
+      <div class="asec" id="asec-settings" hidden></div>
     </div>
   </div>
 </div>
@@ -1791,6 +1801,8 @@ const state = {
   pending: [],      // manager: all pending requests
   approved: [],     // manager: approved, awaiting hand-out
   meetingPending: [], // manager: pending morning-meeting credits
+  settings: null,   // manager: editable settings (Settings tab)
+  tiles: {},        // which launcher tiles are enabled
   search: "",
   activeIdx: null,  // index of employee in dialog
   screen: "home",   // home | bubbles | checklist (top-level app screen)
@@ -2427,6 +2439,14 @@ function render() {
   renderEarn();
   updateChecklistNav();
   updateBubblesNav();
+  updateTiles();
+}
+
+// Show/hide launcher tiles per the manager's Settings (tiles turned off are hidden for everyone).
+function updateTiles() {
+  const t = state.tiles || {};
+  const map = { tileBubbles: "bubbles", tileChecklist: "checklist", tileBoxCounter: "boxcounter", tileEom: "eom", tileLabel: "label", tileResources: "resources" };
+  Object.keys(map).forEach(id => { const el = $(id); if (el) el.hidden = (t[map[id]] === false); });
 }
 
 // Managers: light up the Bubbles tile + Rewards tab red when there are reward
@@ -3401,14 +3421,15 @@ function renderBoxCount() {
   if (bar) bar.hidden = false;
   const saveAs = $("bcSaveAs");
   if (saveAs) saveAs.textContent = session && session.name ? ("Saving as " + session.name) : "";
-  const friTxt = fmtRunDate(meta.countFriday || "");
+  const dayTxt = fmtRunDate(meta.countDate || "");
+  const dayName = meta.countDayName || "Friday";
   let note;
   if (meta.countedThisCycle) {
-    note = `<div class="cl-banner done">✓ This week's count is done (<strong>${escapeHtml(friTxt)}</strong>). No count needed — but you can re-count if something changed.</div>`;
-  } else if (meta.isFriday) {
-    note = `<div class="cl-banner">📦 It's Friday — time for this week's box count.</div>`;
+    note = `<div class="cl-banner done">✓ This week's count is done (<strong>${escapeHtml(dayTxt)}</strong>). No count needed — but you can re-count if something changed.</div>`;
+  } else if (meta.isCountDay) {
+    note = `<div class="cl-banner">📦 It's ${escapeHtml(dayName)} — time for this week's box count.</div>`;
   } else {
-    note = `<div class="cl-banner info">📦 No count needed today — counts are done on <strong>Fridays</strong>. If you count now, it's recorded for <strong>${escapeHtml(friTxt)}</strong>.</div>`;
+    note = `<div class="cl-banner info">📦 No count needed today — counts are done on <strong>${escapeHtml(dayName)}s</strong>. If you count now, it's recorded for <strong>${escapeHtml(dayTxt)}</strong>.</div>`;
   }
   if (!state.boxSizes.length) { el.innerHTML = note + `<div class="empty"><h3>No box sizes</h3></div>`; bcUpdateSaveBtn(); return; }
   const list = bcVisibleSizes(false);
@@ -4751,6 +4772,8 @@ function applyData(data) {
   state.pending    = data.pending || [];
   state.approved   = data.approved || [];
   state.meetingPending = data.meetingPending || [];
+  state.settings   = data.settings || null;
+  state.tiles      = data.tiles || {};
   state.checklist = data.checklist || null;
   if (data.role) session.role = data.role;
   if (data.name) session.name = data.name;
@@ -5050,13 +5073,89 @@ async function loadAdmin() {
 
 function switchAdminTab(tab) {
   state.admin.tab = tab;
-  ["rules", "rewards", "people", "admins", "checklist", "label", "notify", "eom"].forEach(t => { $("asec-" + t).hidden = (t !== tab); });
+  ["rules", "rewards", "people", "admins", "checklist", "label", "notify", "eom", "settings"].forEach(t => { $("asec-" + t).hidden = (t !== tab); });
   document.querySelectorAll(".atab").forEach(b => b.classList.toggle("active", b.dataset.atab === tab));
   adminError("");
   hideAdminForms();
   if (tab === "label") renderLabelAdmin();
   if (tab === "notify") renderNotifyAdmin();
   if (tab === "eom") loadEomAdmin();
+  if (tab === "settings") renderSettingsAdmin();
+}
+
+// ----- Manage → Settings -----
+const SETTINGS_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const SETTINGS_TILES = [
+  { key: "bubbles", label: "Bubbles" },
+  { key: "checklist", label: "Closing Checklist" },
+  { key: "boxcounter", label: "Box Counter" },
+  { key: "eom", label: "Employee of the Month" },
+  { key: "label", label: "Label Printer" },
+  { key: "resources", label: "Imported Resources" },
+];
+function renderSettingsAdmin() {
+  const box = $("asec-settings");
+  const s = state.settings || {};
+  const tiles = state.tiles || {};
+  const closed = new Set((s.closedDows || [0, 6]).map(Number));
+  const cd = (s.boxCountDow != null) ? Number(s.boxCountDow) : 5;
+  box.innerHTML = `
+    <div class="ftitle" style="margin-bottom:4px;">Settings</div>
+    <div class="muted" style="font-size:13px; margin-bottom:16px;">Manager-only. Changes take effect right away.</div>
+
+    <div class="sset">
+      <div class="ftitle2">Manager PIN</div>
+      <div class="muted" style="font-size:12.5px; margin:2px 0 8px;">${s.managerPinSet ? "A custom manager PIN is set." : "Using the built-in manager PIN."} Enter a new 4–6 digit PIN to change it (leave blank to keep it).</div>
+      <input id="setPin" type="password" inputmode="numeric" maxlength="6" placeholder="New PIN" style="font-size:16px; padding:10px; width:170px;">
+    </div>
+
+    <div class="sset">
+      <div class="ftitle2">Alert email</div>
+      <div class="muted" style="font-size:12.5px; margin:2px 0 8px;">Where manager notifications (reward + morning-meeting requests) are sent. Blank = built-in default.</div>
+      <input id="setEmail" type="email" placeholder="name@actionspaparts.com" value="${escapeAttr(s.alertEmail || "")}" style="font-size:16px; padding:10px; width:300px; max-width:100%;">
+    </div>
+
+    <div class="sset">
+      <div class="ftitle2">Closing checklist — closed days</div>
+      <div class="muted" style="font-size:12.5px; margin:2px 0 8px;">No closing checklist is assigned on the checked days.</div>
+      <div class="sset-days">${SETTINGS_DAYS.map((d, i) => `<label class="sset-day"><input type="checkbox" data-closed="${i}" ${closed.has(i) ? "checked" : ""}> ${d}</label>`).join("")}</div>
+    </div>
+
+    <div class="sset">
+      <div class="ftitle2">Box count day</div>
+      <div class="muted" style="font-size:12.5px; margin:2px 0 8px;">The day the weekly box count is “needed” (it can still be done any day).</div>
+      <select id="setCountDay" style="font-size:16px; padding:10px;">${SETTINGS_DAYS.map((d, i) => `<option value="${i}" ${i === cd ? "selected" : ""}>${d}</option>`).join("")}</select>
+    </div>
+
+    <div class="sset">
+      <div class="ftitle2">App tiles (home screen)</div>
+      <div class="muted" style="font-size:12.5px; margin:2px 0 8px;">Turn a tile off to hide that app from everyone's home screen.</div>
+      <div class="sset-days">${SETTINGS_TILES.map(t => `<label class="sset-day"><input type="checkbox" data-tile="${t.key}" ${tiles[t.key] !== false ? "checked" : ""}> ${escapeHtml(t.label)}</label>`).join("")}</div>
+    </div>
+
+    <div style="margin-top:18px;"><button class="primary" id="setSaveBtn">Save settings</button></div>
+  `;
+  $("setSaveBtn").addEventListener("click", saveSettings);
+}
+async function saveSettings() {
+  const closedDows = [...document.querySelectorAll("[data-closed]:checked")].map(c => parseInt(c.dataset.closed, 10));
+  const tiles = {};
+  document.querySelectorAll("[data-tile]").forEach(c => { tiles[c.dataset.tile] = c.checked; });
+  const settings = { alertEmail: $("setEmail").value.trim(), closedDows, boxCountDow: parseInt($("setCountDay").value, 10), tiles };
+  const pin = $("setPin").value.trim();
+  if (pin) settings.managerPin = pin;
+  adminError("");
+  const btn = $("setSaveBtn"); if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  try {
+    const res = await apiCall("updateSettings", { pin: session.pin, settings });
+    if (res.error) { adminError(res.error); if (btn) { btn.disabled = false; btn.textContent = "Save settings"; } return; }
+    await loadAdmin();
+    await fetchData();
+    if (state.admin.tab === "settings") { renderSettingsAdmin(); const b2 = $("setSaveBtn"); if (b2) b2.textContent = "Saved ✓"; }
+  } catch (err) {
+    adminError("Error: " + (err && err.message ? err.message : err));
+    if (btn) { btn.disabled = false; btn.textContent = "Save settings"; }
+  }
 }
 
 // Shared save path: posts the action, then refreshes both the admin lists and

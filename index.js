@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '108';
+const APP_VERSION = '109';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -59,6 +59,15 @@ const pool = new Pool({
 // it's missing, and only backfills from old "whole team" descriptions at the
 // moment the column is first created (so a later manager un-check is respected).
 async function ensureSchema() {
+  // Manager-editable settings (key/value), loaded first so the rest of boot can
+  // read them (e.g. closing days). Backs the in-app Settings screen.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT ''
+    )`);
+  await loadSettings();
+
   const { rows } = await pool.query(
     `SELECT 1 FROM information_schema.columns
       WHERE table_name = 'rules' AND column_name = 'team_wide'`
@@ -393,10 +402,10 @@ async function ensureSchema() {
 
   // Clean up any not-yet-completed runs that landed on a closed day (e.g. a
   // Sunday run created before this rule existed). Leaves completed history alone.
-  if (CLOSED_DOWS.length) {
+  if (closedDows().length) {
     await pool.query(
       `DELETE FROM checklist_runs WHERE status = 'pending' AND EXTRACT(DOW FROM run_date)::int = ANY($1)`,
-      [CLOSED_DOWS]);
+      [closedDows()]);
   }
 
   // ----- Label Printer: print queue + bridge heartbeat -----
@@ -545,6 +554,90 @@ async function ensureSchema() {
   await ensureVapid();
 }
 
+// ---------- Manager-editable settings (cached in memory; refreshed on write) ----------
+let SETTINGS = {};
+async function loadSettings() {
+  try {
+    const { rows } = await pool.query('SELECT key, value FROM app_settings');
+    const s = {}; rows.forEach(r => { s[r.key] = r.value; });
+    SETTINGS = s;
+  } catch (e) { console.warn('loadSettings failed:', e && e.message); }
+}
+function settingStr(key, fallback) {
+  const v = SETTINGS[key];
+  return (v != null && v !== '') ? v : fallback;
+}
+function settingJson(key, fallback) {
+  try { return SETTINGS[key] ? JSON.parse(SETTINGS[key]) : fallback; } catch { return fallback; }
+}
+async function setSetting(key, value) {
+  const v = value == null ? '' : String(value);
+  await pool.query(
+    `INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`,
+    [key, v]);
+  SETTINGS[key] = v;
+}
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const TILE_KEYS = ['bubbles', 'checklist', 'boxcounter', 'eom', 'label', 'resources'];
+// Derived settings with sensible defaults.
+function closedDows() {
+  const a = settingJson('closed_dows', [0, 6]);
+  return Array.isArray(a) ? a.map(Number).filter(n => n >= 0 && n <= 6) : [0, 6];
+}
+function boxCountDow() {
+  const n = parseInt(settingStr('box_count_dow', '5'), 10);
+  return (n >= 0 && n <= 6) ? n : 5;
+}
+function alertEmail() { return settingStr('alert_email', MANAGER_EMAIL); }
+// The owner-set PIN works as the manager PIN; the env PIN always works too as a
+// permanent admin recovery (staff never knew it, so it's invisible to them).
+function managerPinMatches(p) {
+  const s = String(p == null ? '' : p);
+  const db = settingStr('manager_pin', '');
+  if (db && s === db) return true;
+  return s === String(MANAGER_PIN);
+}
+function tilesConfig() {
+  const saved = settingJson('tiles', {});
+  const cfg = {};
+  TILE_KEYS.forEach(k => { cfg[k] = saved[k] !== false; });   // on unless explicitly turned off
+  return cfg;
+}
+
+// Manager saves the Settings screen. Every field is optional — only provided
+// ones change. Manager-only.
+async function updateSettings(who, body) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const s = (body && body.settings) || {};
+  if (typeof s.managerPin === 'string' && s.managerPin.trim() !== '') {
+    const pin = cleanPin(s.managerPin);
+    if (!pin) return { error: 'Manager PIN must be 4–6 digits.' };
+    const { rows } = await pool.query('SELECT 1 FROM employees WHERE pin = $1 AND active = true LIMIT 1', [pin]);
+    if (rows.length) return { error: 'That PIN is already used by an employee.' };
+    await setSetting('manager_pin', pin);
+  }
+  if (typeof s.alertEmail === 'string') {
+    const em = normalizeEmail(s.alertEmail);
+    if (em && !validEmail(em)) return { error: 'Enter a valid alert email (or leave it blank).' };
+    await setSetting('alert_email', em);
+  }
+  if (Array.isArray(s.closedDows)) {
+    const arr = [...new Set(s.closedDows.map(Number).filter(n => n >= 0 && n <= 6))].sort();
+    await setSetting('closed_dows', JSON.stringify(arr));
+  }
+  if (s.boxCountDow != null) {
+    const n = parseInt(s.boxCountDow, 10);
+    if (!(n >= 0 && n <= 6)) return { error: 'Pick a valid box-count day.' };
+    await setSetting('box_count_dow', String(n));
+  }
+  if (s.tiles && typeof s.tiles === 'object') {
+    const cur = settingJson('tiles', {});
+    TILE_KEYS.forEach(k => { if (k in s.tiles) cur[k] = !!s.tiles[k]; });
+    await setSetting('tiles', JSON.stringify(cur));
+  }
+  return { ok: true };
+}
+
 // =================================================================
 // Helpers
 // =================================================================
@@ -630,7 +723,7 @@ function isManager(who) { return !!(who && who.role === 'manager'); }
 async function roleForPin(pin) {
   const p = String(pin == null ? '' : pin).trim();
   if (!p) return null;
-  if (p === String(MANAGER_PIN)) return { role: 'manager', name: 'Manager' };
+  if (managerPinMatches(p)) return { role: 'manager', name: 'Manager' };
   const { rows } = await pool.query(
     'SELECT name FROM employees WHERE pin = $1 AND active = true LIMIT 1',
     [p]
@@ -700,8 +793,9 @@ async function notifyEmployee(name, subject, body) {
 }
 
 async function notifyManager(subject, body) {
-  if (MANAGER_EMAIL) await sendResend(MANAGER_EMAIL, subject, body);
-  else console.log(`[manager email skipped — no MANAGER_EMAIL set] ${subject}`);
+  const to = alertEmail();
+  if (to) await sendResend(to, subject, body);
+  else console.log(`[manager email skipped — no alert email set] ${subject}`);
 }
 
 function awardEmailBody(name, metric, amount, bal) {
@@ -812,6 +906,13 @@ async function getData(who) {
     meetingPending,
     allAwards: allAwards.rows,
     checklist,
+    tiles: tilesConfig(),
+    settings: isManager ? {
+      alertEmail: settingStr('alert_email', ''),
+      closedDows: closedDows(),
+      boxCountDow: boxCountDow(),
+      managerPinSet: !!settingStr('manager_pin', ''),
+    } : null,
     version: APP_VERSION,
   };
 }
@@ -876,6 +977,7 @@ async function getPublic() {
     checklist,
     boxSizes,
     resources,
+    tiles: tilesConfig(),
     version: APP_VERSION,
   };
 }
@@ -1339,7 +1441,7 @@ async function addEmployee(who, e) {
   if (rawPin) {
     newPin = cleanPin(rawPin);
     if (!newPin) return { error: 'PIN must be 4–6 digits' };
-    if (newPin === String(MANAGER_PIN)) return { error: 'That PIN is reserved for the manager' };
+    if (managerPinMatches(newPin)) return { error: 'That PIN is reserved for the manager' };
     const dupPin = await pool.query('SELECT 1 FROM employees WHERE pin = $1', [newPin]);
     if (dupPin.rows.length) return { error: 'That PIN is already in use by someone else' };
   }
@@ -1375,7 +1477,7 @@ async function updateEmployee(who, e) {
   if (rawPin) {
     newPin = cleanPin(rawPin);
     if (!newPin) return { error: 'PIN must be 4–6 digits' };
-    if (newPin === String(MANAGER_PIN)) return { error: 'That PIN is reserved for the manager' };
+    if (managerPinMatches(newPin)) return { error: 'That PIN is reserved for the manager' };
     const dupPin = await pool.query('SELECT 1 FROM employees WHERE pin = $1 AND id <> $2', [newPin, id]);
     if (dupPin.rows.length) return { error: 'That PIN is already in use by someone else' };
   }
@@ -1556,8 +1658,8 @@ async function setAdminActive(who, id, active) {
 // safe to inline. To change the warehouse timezone, swap the IANA name here.
 const BIZ_DATE = "(now() AT TIME ZONE 'America/Los_Angeles')::date";
 
-// Days of week with no closing checklist (office closed). 0 = Sunday, 6 = Saturday.
-const CLOSED_DOWS = [0, 6];
+// Days with no closing checklist are the manager-editable `closed_dows` setting
+// (default Sun+Sat) — see closedDows().
 
 async function nameForEmpId(id) {
   if (id == null) return null;
@@ -1579,7 +1681,7 @@ async function ensureTodayRun() {
 
     // Don't create/assign a run on closed days (e.g. Sundays — office closed).
     const { rows: dowRows } = await client.query(`SELECT EXTRACT(DOW FROM ${BIZ_DATE})::int AS dow`);
-    if (CLOSED_DOWS.includes(dowRows[0].dow)) { await client.query('ROLLBACK'); return null; }
+    if (closedDows().includes(dowRows[0].dow)) { await client.query('ROLLBACK'); return null; }
 
     const { rows: tRows } = await client.query(`SELECT to_char(${BIZ_DATE}, 'YYYY-MM-DD') AS d`);
     const today = tRows[0].d;
@@ -2612,16 +2714,17 @@ async function boxCountMeta() {
            to_char((SELECT (max(last_counted_at) AT TIME ZONE 'America/Los_Angeles')::date
                       FROM box_sizes WHERE active = true), 'YYYY-MM-DD') AS last_count_date`);
   const today = rows[0].today;
-  const dow = rows[0].dow;                       // 0=Sun … 5=Fri … 6=Sat
+  const dow = rows[0].dow;                       // 0=Sun … 6=Sat
   const lastCountDate = rows[0].last_count_date || null;
-  const isFriday = dow === 5;
+  const cd = boxCountDow();                       // the "count needed" weekday (default 5=Fri)
+  const isCountDay = dow === cd;
   const countedToday = !!lastCountDate && lastCountDate === today;
-  // The Friday this count belongs to = most recent Friday on/before today.
-  const countFriday = addDaysStr(today, -(((dow - 5) + 7) % 7));
-  // This cycle is covered if the last count landed on/after that Friday.
-  const countedThisCycle = !!lastCountDate && lastCountDate >= countFriday;
-  const nextFriday = addDaysStr(today, isFriday ? 7 : (((5 - dow) + 7) % 7));
-  return { today, dow, isFriday, countedToday, countFriday, countedThisCycle, lastCountDate, nextFriday };
+  // The count-day this count belongs to = most recent count-day on/before today.
+  const countDate = addDaysStr(today, -(((dow - cd) + 7) % 7));
+  // This cycle is covered if the last count landed on/after that count-day.
+  const countedThisCycle = !!lastCountDate && lastCountDate >= countDate;
+  const nextCountDate = addDaysStr(today, isCountDay ? 7 : (((cd - dow) + 7) % 7));
+  return { today, dow, isCountDay, countDayName: DAY_NAMES[cd], countedToday, countDate, countedThisCycle, lastCountDate, nextCountDate };
 }
 
 async function getBoxSizes(who) {
@@ -2682,7 +2785,7 @@ async function emailLowStock() {
 
 async function saveBoxCount(who, body) {
   if (!who) return { error: 'Not authorized' };
-  const meta = await boxCountMeta();   // any day is allowed; the count is for meta.countFriday
+  const meta = await boxCountMeta();   // any day is allowed; the count is for meta.countDate
   const counts = Array.isArray(body && body.counts) ? body.counts : [];
   const by = ((body && body.countedBy) ? String(body.countedBy) : '').trim().slice(0, 80) || (who.name || '');
   let saved = 0;
@@ -2696,8 +2799,8 @@ async function saveBoxCount(who, body) {
     saved++;
   }
   if (saved) {
-    const forFri = meta.isFriday ? '' : ` (weekly count for Fri ${meta.countFriday})`;
-    await logBoxActivity(by, 'count', `Counted ${saved} box size${saved === 1 ? '' : 's'}${forFri}`);
+    const forDay = meta.isCountDay ? '' : ` (weekly count for ${meta.countDate})`;
+    await logBoxActivity(by, 'count', `Counted ${saved} box size${saved === 1 ? '' : 's'}${forDay}`);
     try { await emailLowStock(); } catch (e) { console.warn('low-stock email failed:', e && e.message); }
   }
   const data = await getBoxSizes(who);
@@ -3070,7 +3173,7 @@ async function ensureVapid() {
   let row = rows[0];
   if (!row || !row.public_key || !row.private_key) {
     const keys = webpush.generateVAPIDKeys();
-    const subject = MANAGER_EMAIL ? ('mailto:' + MANAGER_EMAIL) : 'mailto:notifications@actionspaparts.com';
+    const subject = alertEmail() ? ('mailto:' + alertEmail()) : 'mailto:notifications@actionspaparts.com';
     await pool.query(
       `INSERT INTO push_keys (id, public_key, private_key, subject) VALUES (1, $1, $2, $3)
        ON CONFLICT (id) DO UPDATE SET public_key = $1, private_key = $2, subject = $3`,
@@ -3304,6 +3407,7 @@ app.post('/', async (req, res) => {
         case 'removePushSubscription': out = await removePushSubscription(who, body); break;
         case 'getPushStatus':          out = await getPushStatus(who); break;
         case 'setNotifyEnabled':       out = await setNotifyEnabled(who, body.enabled); break;
+        case 'updateSettings':         out = await updateSettings(who, body); break;
         case 'sendTestPush':           out = await sendTestPush(who); break;
         case 'broadcastPush':          out = await broadcastPush(who, body); break;
         default:                  out = { error: 'Unknown action: ' + action };
