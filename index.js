@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '106';
+const APP_VERSION = '107';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -2600,8 +2600,11 @@ function addDaysStr(ymd, n) {
   const [y, m, d] = String(ymd).split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }
-// Counting is Friday-only, in US Pacific (same tz as the checklist). Reports
-// whether today is Friday, whether a count already happened today, and the next Friday.
+// Box counting can happen ANY day (US Pacific tz). A count is only "needed" on
+// Friday; a count entered on another day is recorded for that week's Friday —
+// the most recent Friday on or before today ("friday of the past week"). Reports
+// today/day-of-week, that count Friday, whether this cycle is already counted,
+// and the next Friday.
 async function boxCountMeta() {
   const { rows } = await pool.query(`
     SELECT to_char((now() AT TIME ZONE 'America/Los_Angeles')::date, 'YYYY-MM-DD') AS today,
@@ -2613,8 +2616,12 @@ async function boxCountMeta() {
   const lastCountDate = rows[0].last_count_date || null;
   const isFriday = dow === 5;
   const countedToday = !!lastCountDate && lastCountDate === today;
-  const add = isFriday ? (countedToday ? 7 : 0) : (((5 - dow) + 7) % 7);
-  return { today, dow, isFriday, countedToday, lastCountDate, nextFriday: addDaysStr(today, add) };
+  // The Friday this count belongs to = most recent Friday on/before today.
+  const countFriday = addDaysStr(today, -(((dow - 5) + 7) % 7));
+  // This cycle is covered if the last count landed on/after that Friday.
+  const countedThisCycle = !!lastCountDate && lastCountDate >= countFriday;
+  const nextFriday = addDaysStr(today, isFriday ? 7 : (((5 - dow) + 7) % 7));
+  return { today, dow, isFriday, countedToday, countFriday, countedThisCycle, lastCountDate, nextFriday };
 }
 
 async function getBoxSizes(who) {
@@ -2675,8 +2682,7 @@ async function emailLowStock() {
 
 async function saveBoxCount(who, body) {
   if (!who) return { error: 'Not authorized' };
-  const meta = await boxCountMeta();
-  if (!meta.isFriday) return { error: 'Box counting is only available on Fridays.' };
+  const meta = await boxCountMeta();   // any day is allowed; the count is for meta.countFriday
   const counts = Array.isArray(body && body.counts) ? body.counts : [];
   const by = ((body && body.countedBy) ? String(body.countedBy) : '').trim().slice(0, 80) || (who.name || '');
   let saved = 0;
@@ -2690,7 +2696,8 @@ async function saveBoxCount(who, body) {
     saved++;
   }
   if (saved) {
-    await logBoxActivity(by, 'count', `Counted ${saved} box size${saved === 1 ? '' : 's'}`);
+    const forFri = meta.isFriday ? '' : ` (weekly count for Fri ${meta.countFriday})`;
+    await logBoxActivity(by, 'count', `Counted ${saved} box size${saved === 1 ? '' : 's'}${forFri}`);
     try { await emailLowStock(); } catch (e) { console.warn('low-stock email failed:', e && e.message); }
   }
   const data = await getBoxSizes(who);

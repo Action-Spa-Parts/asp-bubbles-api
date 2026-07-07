@@ -3356,27 +3356,25 @@ function renderBoxCount() {
   const el = $("bcCountList");
   const meta = state.boxMeta || {};
   const hint = $("bcCountHint"), bar = $("bcSaveBar");
-  // Friday-only: not Friday, or this week's count already done → no counting.
-  if (!meta.isFriday) {
-    if (hint) hint.hidden = true;
-    if (bar) bar.hidden = true;
-    el.innerHTML = `<div class="cl-banner info">📦 Box counting happens on <strong>Fridays</strong>. Next count: <strong>${escapeHtml(fmtRunDate(meta.nextFriday || ""))}</strong>.</div>`;
-    return;
-  }
-  if (meta.countedToday) {
-    if (hint) hint.hidden = true;
-    if (bar) bar.hidden = true;
-    el.innerHTML = `<div class="cl-banner done">✓ This week's count is done — no count needed until next Friday (<strong>${escapeHtml(fmtRunDate(meta.nextFriday || ""))}</strong>).</div>`;
-    return;
-  }
+  // Counting is allowed ANY day; it's only "needed" on Friday. A count entered on
+  // another day is recorded for that week's Friday (meta.countFriday).
   if (hint) hint.hidden = false;
   if (bar) bar.hidden = false;
   const saveAs = $("bcSaveAs");
   if (saveAs) saveAs.textContent = session && session.name ? ("Saving as " + session.name) : "";
-  if (!state.boxSizes.length) { el.innerHTML = `<div class="empty"><h3>No box sizes</h3></div>`; bcUpdateSaveBtn(); return; }
+  const friTxt = fmtRunDate(meta.countFriday || "");
+  let note;
+  if (meta.countedThisCycle) {
+    note = `<div class="cl-banner done">✓ This week's count is done (<strong>${escapeHtml(friTxt)}</strong>). No count needed — but you can re-count if something changed.</div>`;
+  } else if (meta.isFriday) {
+    note = `<div class="cl-banner">📦 It's Friday — time for this week's box count.</div>`;
+  } else {
+    note = `<div class="cl-banner info">📦 No count needed today — counts are done on <strong>Fridays</strong>. If you count now, it's recorded for <strong>${escapeHtml(friTxt)}</strong>.</div>`;
+  }
+  if (!state.boxSizes.length) { el.innerHTML = note + `<div class="empty"><h3>No box sizes</h3></div>`; bcUpdateSaveBtn(); return; }
   const list = bcVisibleSizes(false);
-  if (!list.length) { el.innerHTML = `<div class="empty"><div>No sizes to count (matching your search).</div></div>`; bcUpdateSaveBtn(); return; }
-  el.innerHTML = list.map(s => {
+  if (!list.length) { el.innerHTML = note + `<div class="empty"><div>No sizes to count (matching your search).</div></div>`; bcUpdateSaveBtn(); return; }
+  el.innerHTML = note + list.map(s => {
     const entered = state.boxCountLocal[s.id];
     const hasCount = entered !== undefined && entered !== "";
     const counted = hasCount ? parseInt(entered, 10) : null;
