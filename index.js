@@ -2793,6 +2793,11 @@ async function printAck(body) {
 // =================================================================
 
 const app = express();
+// Railway terminates TLS at an edge proxy, so the raw connection IP is always the
+// proxy's. Trusting the proxy makes req.ip reflect the real client (from
+// X-Forwarded-For) — needed so the login rate-limiter buckets per actual device,
+// not per proxy (which would make the whole warehouse share one bucket).
+app.set('trust proxy', true);
 app.use(cors({ origin: true }));
 // PWA posts JSON as text/plain (to avoid CORS preflight in the old setup).
 // Accept any content-type and parse manually.
@@ -3422,6 +3427,59 @@ async function broadcastPush(who, body) {
   return { ok: true, ...res };
 }
 
+// ---------- Login rate limiting (brute-force protection) ----------
+// The PIN pad is publicly reachable on the wall TV, so anyone could hammer it
+// guessing a PIN (or an admin password). We throttle repeated FAILED logins per
+// client IP. A successful login clears the counter, so legit users mistyping a
+// PIN are unaffected in practice; an automated guesser trips the threshold and
+// gets an escalating cooldown. In-memory is fine — Railway runs a single
+// instance and the state only needs to survive a burst, not a restart.
+// (Caveat: an attacker who rotates/spoofs X-Forwarded-For can sidestep an
+// IP-based limit — inherent to any IP limiter; this stops casual/script abuse.)
+const LOGIN_ACTIONS = new Set(['login', 'adminLogin']);
+const LOGIN_WINDOW_MS = 5 * 60 * 1000;         // rolling window for counting failures
+const LOGIN_MAX_FAILS = 12;                    // failures allowed in the window before a cooldown
+const LOGIN_COOLDOWNS = [60, 120, 300, 600];   // escalating cooldown (seconds) each time it trips
+const loginFails = new Map();                  // ip -> { times:number[], strikes:number, until:number }
+
+function rlKey(req) {
+  return String(req.ip || (req.socket && req.socket.remoteAddress) || 'unknown');
+}
+
+// True (with retryAfter seconds) if this key is currently in a cooldown.
+function loginRateBlocked(key) {
+  const rec = loginFails.get(key);
+  if (rec && rec.until && Date.now() < rec.until) {
+    return { blocked: true, retryAfter: Math.ceil((rec.until - Date.now()) / 1000) };
+  }
+  return { blocked: false };
+}
+
+// Record the outcome of a login attempt. Success clears the key; enough failures
+// inside the window start (or escalate) a cooldown.
+function loginRateRecord(key, success) {
+  const now = Date.now();
+  if (success) { loginFails.delete(key); return; }
+  let rec = loginFails.get(key);
+  if (!rec) { rec = { times: [], strikes: 0, until: 0 }; loginFails.set(key, rec); }
+  rec.times = rec.times.filter(t => now - t < LOGIN_WINDOW_MS);   // drop stale failures
+  rec.times.push(now);
+  if (rec.times.length >= LOGIN_MAX_FAILS) {
+    const cd = LOGIN_COOLDOWNS[Math.min(rec.strikes, LOGIN_COOLDOWNS.length - 1)];
+    rec.until = now + cd * 1000;
+    rec.strikes += 1;
+    rec.times = [];                                                // cooldown replaces the count
+  }
+  // Opportunistic cleanup so the Map can't grow unbounded from many stale IPs.
+  if (loginFails.size > 500) {
+    for (const [k, v] of loginFails) {
+      if ((!v.until || v.until < now) && (!v.times.length || now - v.times[v.times.length - 1] > LOGIN_WINDOW_MS)) {
+        loginFails.delete(k);
+      }
+    }
+  }
+}
+
 app.post('/', async (req, res) => {
   let body;
   try {
@@ -3430,6 +3488,16 @@ app.post('/', async (req, res) => {
     return res.status(400).json({ error: 'Bad JSON body' });
   }
   const action = body.action;
+  // Brute-force throttle: reject login attempts from an IP that's in cooldown
+  // before we ever touch the DB. Returned as a normal {error} (status 200) so the
+  // login UI shows the message instead of throwing on a non-2xx status.
+  const rateLimited = LOGIN_ACTIONS.has(action);
+  if (rateLimited) {
+    const blk = loginRateBlocked(rlKey(req));
+    if (blk.blocked) {
+      return res.json({ error: `Too many attempts. Please wait ${blk.retryAfter}s and try again.` });
+    }
+  }
   try {
     let out;
     // Public actions need no identity.
@@ -3548,6 +3616,9 @@ app.post('/', async (req, res) => {
         default:                  out = { error: 'Unknown action: ' + action };
       }
     }
+    // Feed the outcome back to the throttle: a clean result clears the IP's
+    // failure count; an {error} counts as a failed attempt.
+    if (rateLimited) loginRateRecord(rlKey(req), !(out && out.error));
     res.json(out);
   } catch (err) {
     console.error('handler error:', err);
