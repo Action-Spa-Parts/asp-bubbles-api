@@ -1015,8 +1015,8 @@
       <button class="app-tile" id="tileBubbles">
         <span class="tile-icon"><img src="bubbles-icon.png" alt=""></span>
         <span class="tile-body">
-          <span class="tile-name">Bubbles<span class="turn-badge" id="bubblesAlertBadge" hidden>redeem</span></span>
-          <span class="tile-desc">Rewards &amp; leaderboard</span>
+          <span class="tile-name">Bubbles<span class="turn-badge" id="bubblesAlertBadge" hidden>1</span></span>
+          <span class="tile-desc" id="bubblesTileDesc">Rewards &amp; leaderboard</span>
         </span>
         <span class="tile-arrow">›</span>
       </button>
@@ -2449,16 +2449,19 @@ function updateTiles() {
   Object.keys(map).forEach(id => { const el = $(id); if (el) el.hidden = (t[map[id]] === false); });
 }
 
-// Managers: light up the Bubbles tile + Rewards tab red when there are reward
-// redemptions waiting (pending approval or approved and ready to hand out).
+// Managers: light up the Bubbles tile + Rewards tab red, with a count badge,
+// when there's anything to act on — reward redemptions to approve, morning-
+// meeting credits to approve, or approved rewards ready to hand out.
 function updateBubblesNav() {
   const isMgr = session.role === "manager";
-  const waiting = isMgr ? ((state.pending || []).length + (state.approved || []).length) : 0;
-  const need = waiting > 0;
+  const n = isMgr ? ((state.pending || []).length + (state.meetingPending || []).length + (state.approved || []).length) : 0;
+  const need = n > 0;
   const tile = $("tileBubbles");
   if (tile) tile.classList.toggle("alert", need);
   const badge = $("bubblesAlertBadge");
-  if (badge) badge.hidden = !need;
+  if (badge) { badge.textContent = String(n); badge.hidden = !need; }
+  const desc = $("bubblesTileDesc");
+  if (desc) desc.textContent = need ? (n + (n === 1 ? " thing" : " things") + " to approve") : "Rewards & leaderboard";
   const rewardsTab = document.querySelector('.bottomnav .navbtn[data-view="rewards"]');
   if (rewardsTab) rewardsTab.classList.toggle("alert", need);
 }
