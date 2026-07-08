@@ -881,6 +881,28 @@
   .ps-cmp .ps-cmp-l { color:var(--muted); }
   .ps-cmp .ps-cmp-v { font-weight:600; font-variant-numeric:tabular-nums; }
   .ps-foot { color:var(--muted); font-size:12px; margin-top:16px; }
+  /* Winner cards */
+  .ps-winners { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:6px; }
+  .ps-win { border:1px solid var(--border); border-radius:var(--radius); padding:14px; box-shadow:var(--shadow-card); background:var(--surface); }
+  .ps-win.gold { background:var(--accent-soft); border-color:var(--accent); }
+  .ps-win-h { font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.05em; }
+  .ps-win-name { font-size:19px; font-weight:800; margin-top:4px; }
+  .ps-win-sub { font-size:13px; color:var(--muted); margin-top:2px; }
+  .ps-win-reward { font-size:12px; font-weight:700; color:var(--accent); margin-top:6px; }
+  /* Leaderboard row with a progress bar */
+  .ps-row2 { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); box-shadow:var(--shadow-card); padding:12px 14px; margin-bottom:8px; }
+  .ps-row2-top { display:flex; align-items:center; gap:12px; }
+  .ps-row2-top .ps-name { font-weight:600; flex:1; display:flex; align-items:center; gap:10px; }
+  .ps-row2-top .ps-lines { font-size:20px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .ps-row2-top .ps-lines small { font-size:11px; font-weight:600; color:var(--muted); }
+  .ps-prog { height:8px; border-radius:99px; background:var(--border); overflow:hidden; margin:8px 0 6px; }
+  .ps-prog > span { display:block; height:100%; background:var(--accent); border-radius:99px; }
+  .ps-prog.done > span { background:var(--good); }
+  .ps-row2-meta { display:flex; gap:10px; align-items:center; font-size:12px; color:var(--muted); flex-wrap:wrap; font-variant-numeric:tabular-nums; }
+  .ps-badge { font-weight:700; color:var(--good); }
+  .ps-vsavg.pos { color:var(--good); font-weight:600; }
+  .ps-vsavg.neg { color:var(--danger); font-weight:600; }
+  @media (max-width:420px){ .ps-winners{ grid-template-columns:1fr; } }
   .cl-item.locked { opacity:0.45; }
   .cl-item .cl-lock { margin-left:auto; font-size:14px; }
   .cl-acat { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
@@ -2600,18 +2622,57 @@ function renderPickShip() {
   const pickers = p.pickers || [];
   const num = (v) => (v == null ? "—" : Number(v).toLocaleString());
 
-  // --- Picking: per-employee leaderboard ---
-  let html = `<div class="ps-sec" style="margin-top:4px;"><h3>Picking — by employee (today)</h3>`;
+  const rw = d.rewards || {};
+  const dw = d.dailyWinner || null;
+  const weekly = d.weekly || {};
+  const goal = p.lineGoal || 100;
+  const avg = p.avgLines || 0;
+
+  // --- Winners banner: daily + weekly ---
+  let html = `<div class="ps-winners">`;
+  html += `<div class="ps-win gold"><div class="ps-win-h">🏆 Daily top picker</div>`;
+  if (dw) {
+    html += `<div class="ps-win-name">${escapeHtml(dw.picker)}</div>
+      <div class="ps-win-sub">${num(dw.lines)} lines · ${num(dw.orders)} orders today</div>
+      ${rw.topPicker != null ? `<div class="ps-win-reward">Earns “Top picker” · +${num(rw.topPicker)} bubbles</div>` : ""}`;
+  } else {
+    html += `<div class="ps-win-sub" style="margin-top:6px;">No picks recorded yet today.</div>`;
+  }
+  html += `</div>`;
+  html += `<div class="ps-win"><div class="ps-win-h">📅 Weekly leader</div>`;
+  if (weekly.winner) {
+    html += `<div class="ps-win-name">${escapeHtml(weekly.winner.picker)}</div>
+      <div class="ps-win-sub">${num(weekly.winner.lines)} lines · ${num(weekly.winner.orders)} orders this week</div>`;
+  } else {
+    html += `<div class="ps-win-sub" style="margin-top:6px;">Building this week — check back as the days add up.</div>`;
+  }
+  html += `</div></div>`;
+
+  // --- Picking: per-employee leaderboard with progress toward the 100-line reward ---
+  html += `<div class="ps-sec"><h3>Picking — by employee (today)</h3>`;
   if (!pickers.length) {
     html += `<div class="cl-meta">No picking recorded yet today.</div>`;
   } else {
-    html += pickers.map((pk, i) => `
-      <div class="ps-row">
-        <div class="ps-name"><span class="rank ${i < 3 ? "top" : ""}">${i + 1}</span>${escapeHtml(pk.picker)}</div>
-        <div class="ps-lines">${num(pk.lines)} <small>lines</small></div>
-        <div class="ps-orders">${num(pk.orders)} orders</div>
-      </div>`).join("");
-    html += `<div class="cl-meta" style="margin-top:6px;">Team total: <strong>${num(p.totalLines)}</strong> lines · <strong>${num(p.totalOrders)}</strong> orders</div>`;
+    html += pickers.map((pk, i) => {
+      const pct = Math.min(100, Math.round((pk.lines / goal) * 100));
+      const done = pk.lines >= goal;
+      const diff = pk.lines - avg;
+      const vsAvg = diff === 0 ? `even w/ avg`
+        : `<span class="ps-vsavg ${diff > 0 ? "pos" : "neg"}">${diff > 0 ? "+" : ""}${num(diff)} vs avg</span>`;
+      const reward = done && rw.over100 != null
+        ? `<span class="ps-badge">✓ hit ${goal} · +${num(rw.over100)} bubbles</span>`
+        : `${num(pk.lines)} / ${goal} lines`;
+      return `
+        <div class="ps-row2">
+          <div class="ps-row2-top">
+            <div class="ps-name"><span class="rank ${i < 3 ? "top" : ""}">${i + 1}</span>${escapeHtml(pk.picker)}${i === 0 ? " 🏆" : ""}</div>
+            <div class="ps-lines">${num(pk.lines)} <small>lines</small></div>
+          </div>
+          <div class="ps-prog ${done ? "done" : ""}"><span style="width:${pct}%"></span></div>
+          <div class="ps-row2-meta">${reward} · ${vsAvg} · ${num(pk.orders)} orders</div>
+        </div>`;
+    }).join("");
+    html += `<div class="cl-meta" style="margin-top:6px;">Team total: <strong>${num(p.totalLines)}</strong> lines · <strong>${num(p.totalOrders)}</strong> orders · avg <strong>${num(avg)}</strong> lines/picker</div>`;
   }
   html += `</div>`;
 

@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '118';
+const APP_VERSION = '119';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -309,6 +309,21 @@ async function ensureSchema() {
       requested_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
       resolved_at   TIMESTAMPTZ,
       resolved_by   TEXT
+    )`);
+
+  // Per-picker daily snapshot. The picking-shipping app only serves TODAY's
+  // per-picker breakdown, so we record each day's totals here to build weekly
+  // (and longer) history + a weekly winner. One row per picker per day; upserted
+  // (latest totals win) whenever the Picks & Ships tab is viewed and by a daily
+  // end-of-shift capture.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pick_daily (
+      pick_date  DATE NOT NULL,
+      picker     TEXT NOT NULL,
+      lines      INTEGER NOT NULL DEFAULT 0,
+      orders     INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (pick_date, picker)
     )`);
 
   // One-time data migrations (guarded so a later manager change isn't reverted).
@@ -3460,6 +3475,54 @@ async function fetchJson(url, ms) {
   }
 }
 
+// The per-person reward goal (lines) tied to the "Pick over 100 lines" earn rule.
+const PICK_LINE_GOAL = 100;
+
+// Sum the picking-shipping "overTime" buckets into per-picker daily totals,
+// sorted most lines first.
+function aggregatePickers(metrics) {
+  const byPicker = {};
+  ((metrics && metrics.overTime) || []).forEach(row => {
+    if (!row) return;
+    const name = row.picker ? String(row.picker) : 'Unknown';
+    if (!byPicker[name]) byPicker[name] = { picker: name, lines: 0, orders: 0 };
+    byPicker[name].lines += Number(row.lines) || 0;
+    byPicker[name].orders += Number(row.orders) || 0;
+  });
+  return Object.values(byPicker).sort((a, b) => b.lines - a.lines);
+}
+
+// Record/refresh today's per-picker totals in pick_daily (idempotent upsert).
+async function upsertPickDaily(dateStr, pickers) {
+  for (const p of pickers) {
+    await pool.query(
+      `INSERT INTO pick_daily (pick_date, picker, lines, orders, updated_at)
+       VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (pick_date, picker)
+       DO UPDATE SET lines = EXCLUDED.lines, orders = EXCLUDED.orders, updated_at = now()`,
+      [dateStr, p.picker, p.lines, p.orders]);
+  }
+}
+
+// Standalone capture (used by the scheduled end-of-shift snapshot) — fetch today's
+// picking metrics and store them so weekly history fills in even on days nobody
+// opens the tab.
+async function capturePickSnapshot(dateStr) {
+  const metrics = await fetchJson(PICKSHIP_BASE + '/api/metrics');
+  await upsertPickDaily(dateStr, aggregatePickers(metrics));
+}
+
+// Bubble amounts for the picking rewards, read live from the earn rules so they
+// track whatever the manager has set.
+async function pickRewardAmounts() {
+  const { rows } = await pool.query(`SELECT metric, bubbles FROM rules WHERE active = true`);
+  const find = re => { const r = rows.find(x => re.test(x.metric || '')); return r ? r.bubbles : null; };
+  return {
+    topPicker: find(/top picker/i),
+    over100: find(/over\s*100\s*lines|100\+?\s*lines/i),
+  };
+}
+
 async function getPickShip(who) {
   if (!isManager(who)) return { error: 'Manager only' };
   let metrics, shipping, comparison;
@@ -3474,21 +3537,37 @@ async function getPickShip(who) {
   }
 
   // Picking is per-picker: sum each picker's time-buckets into a daily total.
-  const byPicker = {};
-  ((metrics && metrics.overTime) || []).forEach(row => {
-    if (!row) return;
-    const name = row.picker ? String(row.picker) : 'Unknown';
-    if (!byPicker[name]) byPicker[name] = { picker: name, lines: 0, orders: 0 };
-    byPicker[name].lines += Number(row.lines) || 0;
-    byPicker[name].orders += Number(row.orders) || 0;
-  });
-  const pickers = Object.values(byPicker).sort((a, b) => b.lines - a.lines);
+  const pickers = aggregatePickers(metrics);
   const nums = (metrics && metrics.numbers) || {};
+  const sumLines = pickers.reduce((a, p) => a + p.lines, 0);
+  const avgLines = pickers.length ? Math.round(sumLines / pickers.length) : 0;
   const picking = {
     pickers,
     totalLines: (nums.lines && nums.lines.total != null) ? nums.lines.total : null,
     totalOrders: (nums.orders && nums.orders.total != null) ? nums.orders.total : null,
+    avgLines,
+    lineGoal: PICK_LINE_GOAL,
   };
+  const dailyWinner = pickers.length ? pickers[0] : null;
+
+  // Record today's snapshot (best-effort) then compute this week's totals + winner.
+  const today = await todayStr();
+  let weekly = { weekStart: null, pickers: [], winner: null };
+  try {
+    if (pickers.length) await upsertPickDaily(today, pickers);
+    const { rows: wk } = await pool.query(
+      `SELECT picker, SUM(lines)::int AS lines, SUM(orders)::int AS orders
+         FROM pick_daily
+        WHERE pick_date >= date_trunc('week', (now() AT TIME ZONE 'America/Los_Angeles')::date)::date
+        GROUP BY picker ORDER BY SUM(lines) DESC`);
+    const { rows: ws } = await pool.query(
+      `SELECT date_trunc('week', (now() AT TIME ZONE 'America/Los_Angeles')::date)::date::text AS d`);
+    weekly = { weekStart: ws[0].d, pickers: wk, winner: wk.length ? wk[0] : null };
+  } catch (e) {
+    console.error('pick weekly rollup error:', e && e.message ? e.message : e);
+  }
+
+  const rewards = await pickRewardAmounts();
 
   // Shipping is team-level (no per-person names in the source).
   const k = (shipping && shipping.kpis) || {};
@@ -3506,11 +3585,11 @@ async function getPickShip(who) {
   };
 
   // Day-over-day comparison ("as of this time of day" — apples to apples).
-  const today = (comparison && comparison.today) || null;
+  const cmpToday = (comparison && comparison.today) || null;
   const cmp = comparison ? {
-    todayLines: today && today.asof ? today.asof.lines : null,
-    todayOrders: today && today.asof ? today.asof.orders : null,
-    weekday: today ? today.weekday : null,
+    todayLines: cmpToday && cmpToday.asof ? cmpToday.asof.lines : null,
+    todayOrders: cmpToday && cmpToday.asof ? cmpToday.asof.orders : null,
+    weekday: cmpToday ? cmpToday.weekday : null,
     benchmarks: ((comparison.benchmarks) || []).map(b => ({
       label: b.label,
       weekday: b.weekday,
@@ -3520,7 +3599,7 @@ async function getPickShip(who) {
     })),
   } : null;
 
-  return { ok: true, picking, shipping: ship, comparison: cmp, fetchedAt: Date.now() };
+  return { ok: true, picking, dailyWinner, weekly, rewards, shipping: ship, comparison: cmp, fetchedAt: Date.now() };
 }
 
 // ---------- Login rate limiting (brute-force protection) ----------
@@ -3751,6 +3830,31 @@ function startWeeklyRefresh() {
   }, 60 * 1000);
 }
 
+// Daily end-of-shift capture of the per-picker picking totals, so the weekly
+// winner/history fills in even on days no manager opens the Picks & Ships tab.
+// Runs once per weekday after the shift winds down (~3:45 PM PT). In-memory guard
+// avoids repeat calls within the day; the upsert is idempotent anyway.
+let lastPickSnapshotDay = null;
+function startDailyPickSnapshot() {
+  setInterval(async () => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT to_char(now() AT TIME ZONE 'America/Los_Angeles', 'ID') AS dow,
+                to_char(now() AT TIME ZONE 'America/Los_Angeles', 'HH24:MI') AS hm,
+                (now() AT TIME ZONE 'America/Los_Angeles')::date::text AS today`);
+      const { dow, hm, today } = rows[0];        // ID: 1=Mon … 6=Sat, 7=Sun
+      if (dow === '6' || dow === '7') return;     // warehouse is closed weekends
+      if (hm < '15:45') return;                   // wait until the shift is winding down
+      if (lastPickSnapshotDay === today) return;  // already captured today
+      await capturePickSnapshot(today);
+      lastPickSnapshotDay = today;
+      console.log('Pick snapshot captured for', today);
+    } catch (e) {
+      console.error('pick snapshot tick error:', e && e.message ? e.message : e);
+    }
+  }, 60 * 1000);
+}
+
 (async () => {
   try {
     await ensureSchema();
@@ -3759,4 +3863,5 @@ function startWeeklyRefresh() {
   }
   app.listen(PORT, () => console.log('Action Spa Warehouse API listening on port', PORT));
   startWeeklyRefresh();
+  startDailyPickSnapshot();
 })();
