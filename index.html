@@ -862,6 +862,7 @@
   .cl-arow .cl-abtns button { font-size:11px; padding:4px 9px; border-radius:6px; }
   .cl-arow.flagged .cl-amain { color:var(--danger); }
   .cl-arow .cl-itime { font-size:11px; color:var(--muted); margin-top:3px; font-variant-numeric:tabular-nums; }
+  .cl-runbody .cl-times { font-size:13px; color:var(--muted); margin:2px 0 10px; font-variant-numeric:tabular-nums; }
   .cl-item.locked { opacity:0.45; }
   .cl-item .cl-lock { margin-left:auto; font-size:14px; }
   .cl-acat { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
@@ -4148,6 +4149,16 @@ function fmtChecklistDuration(r) {
 }
 
 function fmtClockTime(d) { return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }
+// Manager-only start/submit clock times for a run. Gated on started_at, which is
+// stripped from employee payloads, so this stays manager-only (and pre-feature
+// runs with no started_at just show nothing).
+function fmtChecklistTimes(r) {
+  if (!r.started_at) return "";
+  const start = fmtClockTime(new Date(r.started_at));
+  const sub = r.submitted_at ? " · Submitted " + fmtClockTime(new Date(r.submitted_at))
+                             : (r.status === "completed" ? "" : " · not submitted yet");
+  return `<div class="cl-times">🕒 Started ${start}${sub}</div>`;
+}
 function fmtGap(secs) {
   secs = Math.max(0, Math.round(secs));
   const m = Math.floor(secs / 60), s = secs % 60;
@@ -4190,6 +4201,7 @@ function runCardsHtml(runs, today, opts) {
           </div>
         </div>
         <div class="cl-runbody" id="clrun-${r.id}" ${open ? "" : "hidden"}>
+          ${fmtChecklistTimes(r)}
           ${interactive && r.status !== "completed" ? reassignHtml(r) : ""}
           ${interactive && r.late ? (r.late_penalized
             ? `<div class="cl-late-row"><span class="cl-late">⚠ Not started on time — penalized ✓</span></div>`
