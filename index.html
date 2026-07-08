@@ -2673,7 +2673,7 @@ function renderPickShip() {
             <div class="ps-stats">
               <div class="ps-stat"><b>${num(pk.lines)}</b><span>picks</span></div>
               <div class="ps-stat"><b>${num(pk.orders)}</b><span>orders</span></div>
-              <div class="ps-stat"><b>${pk.pph == null ? "—" : num(pk.pph)}</b><span>picks/hr</span></div>
+              <div class="ps-stat"><b>${pk.ordersPerHr == null ? "—" : num(pk.ordersPerHr)}</b><span>orders/hr</span></div>
             </div>
           </div>
           <div class="ps-prog ${done ? "done" : ""}"><span style="width:${pct}%"></span></div>

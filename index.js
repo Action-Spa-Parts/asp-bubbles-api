@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '120';
+const APP_VERSION = '121';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -3478,32 +3478,20 @@ async function fetchJson(url, ms) {
 // The per-person reward goal (lines) tied to the "Pick over 100 lines" earn rule.
 const PICK_LINE_GOAL = 100;
 
-// Sum the picking-shipping "overTime" buckets into per-picker daily totals,
-// sorted most lines (picks) first. Also estimates picks-per-hour from each
-// picker's active window: the source has no per-person hours, so we use the span
-// from the start of their first 15-min bucket to the end of their last one.
+// Per-picker daily performance, taken straight from the picking-shipping app's
+// own `perPerson` dataset (the same numbers that drive its "Picker Performance"
+// table) — NOT re-derived from the time-bucket chart, which undercounts. Fields:
+// lines_today (picks), orders_today, hours_today, avg_sec_today. We surface picks,
+// orders, and orders/hr (orders_today ÷ hours_today) to match the site exactly.
 function aggregatePickers(metrics) {
-  const byPicker = {};
-  ((metrics && metrics.overTime) || []).forEach(row => {
-    if (!row) return;
-    const name = row.picker ? String(row.picker) : 'Unknown';
-    if (!byPicker[name]) byPicker[name] = { picker: name, lines: 0, orders: 0, first: null, last: null };
-    const o = byPicker[name];
-    o.lines += Number(row.lines) || 0;
-    o.orders += Number(row.orders) || 0;
-    const end = Number(row.bucket_end_sec);
-    if (Number.isFinite(end)) {
-      if (o.first == null || end < o.first) o.first = end;
-      if (o.last == null || end > o.last) o.last = end;
-    }
-  });
-  return Object.values(byPicker).map(o => {
-    let pph = null;
-    if (o.first != null && o.last != null) {
-      const hours = ((o.last - o.first) + 900) / 3600;   // +900s to include the first bucket's 15 min
-      if (hours > 0) pph = Math.round(o.lines / hours);
-    }
-    return { picker: o.picker, lines: o.lines, orders: o.orders, pph };
+  const pp = (metrics && metrics.perPerson) || [];
+  return pp.map(r => {
+    const lines = Number(r.lines_today) || 0;
+    const orders = Number(r.orders_today) || 0;
+    const hours = Number(r.hours_today) || 0;
+    const ordersPerHr = hours > 0 ? Math.round((orders / hours) * 10) / 10 : null;
+    const avgSec = (r.avg_sec_today != null && isFinite(r.avg_sec_today)) ? Number(r.avg_sec_today) : null;
+    return { picker: r.picker ? String(r.picker) : 'Unknown', lines, orders, hours, ordersPerHr, avgSecToday: avgSec };
   }).sort((a, b) => b.lines - a.lines);
 }
 
@@ -3551,15 +3539,18 @@ async function getPickShip(who) {
     return { error: "Couldn't reach the picking & shipping dashboard right now. Try again in a moment." };
   }
 
-  // Picking is per-picker: sum each picker's time-buckets into a daily total.
+  // Per-picker performance straight from the site's perPerson dataset. Team
+  // totals are summed from it too, so they match the site's headline numbers
+  // (e.g. "total complete orders today") rather than the differently-counted
+  // metrics.numbers totals.
   const pickers = aggregatePickers(metrics);
-  const nums = (metrics && metrics.numbers) || {};
   const sumLines = pickers.reduce((a, p) => a + p.lines, 0);
+  const sumOrders = pickers.reduce((a, p) => a + p.orders, 0);
   const avgLines = pickers.length ? Math.round(sumLines / pickers.length) : 0;
   const picking = {
     pickers,
-    totalLines: (nums.lines && nums.lines.total != null) ? nums.lines.total : null,
-    totalOrders: (nums.orders && nums.orders.total != null) ? nums.orders.total : null,
+    totalLines: sumLines,
+    totalOrders: sumOrders,
     avgLines,
     lineGoal: PICK_LINE_GOAL,
   };
