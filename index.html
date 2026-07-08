@@ -1119,6 +1119,10 @@
       <h2 class="section">Morning meeting credits to approve</h2>
       <div id="mmPendingList"></div>
     </div>
+    <div id="clFlagsSection" hidden>
+      <h2 class="section">Checklist flags to review</h2>
+      <div id="clFlagsList"></div>
+    </div>
     <div id="fulfillSection" hidden>
       <h2 class="section">Ready to hand out</h2>
       <div id="fulfillList"></div>
@@ -1811,6 +1815,7 @@ const state = {
   pending: [],      // manager: all pending requests
   approved: [],     // manager: approved, awaiting hand-out
   meetingPending: [], // manager: pending morning-meeting credits
+  checklistFlags: [], // manager: open checklist flags to review
   settings: null,   // manager: editable settings (Settings tab)
   tiles: {},        // which launcher tiles are enabled
   search: "",
@@ -2082,6 +2087,27 @@ function renderRewards() {
     });
   } else {
     mmSec.hidden = true;
+  }
+
+  // --- Manager: open checklist flags to review ---
+  const flagSec = $("clFlagsSection");
+  if (isManager && (state.checklistFlags || []).length) {
+    flagSec.hidden = false;
+    $("clFlagsList").innerHTML = state.checklistFlags.map(f => `
+      <div class="req-row">
+        <div>
+          <span style="color:var(--danger);">⚑</span> <strong>${escapeHtml(f.Label)}</strong>
+          <div class="muted" style="font-size:12.5px;">${escapeHtml(f.Date || "")}${f.Assignee ? " · " + escapeHtml(f.Assignee) : ""}${f.Note ? " — " + escapeHtml(f.Note) : ""}${f.By ? " (flagged by " + escapeHtml(f.By) + ")" : ""}</div>
+        </div>
+        <div class="req-actions">
+          <button class="approve" data-openrun="${f.runId}">Open in checklist</button>
+        </div>
+      </div>
+    `).join("");
+    $("clFlagsList").querySelectorAll("[data-openrun]").forEach(b =>
+      b.addEventListener("click", () => { state.expandRun = parseInt(b.dataset.openrun, 10); state.checklistFilter = { name: "", date: "" }; showScreen("checklist"); }));
+  } else {
+    flagSec.hidden = true;
   }
 
   // --- Manager: approved, ready to hand out ---
@@ -2464,7 +2490,7 @@ function updateTiles() {
 // meeting credits to approve, or approved rewards ready to hand out.
 function updateBubblesNav() {
   const isMgr = session.role === "manager";
-  const n = isMgr ? ((state.pending || []).length + (state.meetingPending || []).length + (state.approved || []).length) : 0;
+  const n = isMgr ? ((state.pending || []).length + (state.meetingPending || []).length + (state.approved || []).length + (state.checklistFlags || []).length) : 0;
   const need = n > 0;
   const tile = $("tileBubbles");
   if (tile) tile.classList.toggle("alert", need);
@@ -4281,6 +4307,17 @@ function renderChecklistAdmin() {
   wireReshuffleBtn();
   wireRotationChips(body);
   wireRunCards(body);
+  // If we arrived here from a flag notification, open that run and scroll to it.
+  if (state.expandRun) {
+    const rb = $("clrun-" + state.expandRun);
+    if (rb) {
+      rb.hidden = false;
+      const head = document.querySelector('.cl-runhead[data-run="' + state.expandRun + '"]');
+      const car = head && head.querySelector(".cl-caret"); if (car) car.textContent = "▾";
+      rb.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    state.expandRun = null;
+  }
 }
 
 function wireReshuffleBtn() {
@@ -4798,6 +4835,7 @@ function applyData(data) {
   state.pending    = data.pending || [];
   state.approved   = data.approved || [];
   state.meetingPending = data.meetingPending || [];
+  state.checklistFlags = data.checklistFlags || [];
   state.settings   = data.settings || null;
   state.tiles      = data.tiles || {};
   state.checklist = data.checklist || null;

@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '111';
+const APP_VERSION = '112';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -920,6 +920,19 @@ async function getData(who) {
            FROM meeting_credits WHERE status = 'pending' ORDER BY requested_at`)).rows
     : [];
 
+  // Open (unresolved) checklist flags — surfaced to the manager as notifications.
+  const checklistFlags = isManager
+    ? (await pool.query(
+        `SELECT ci.id AS "itemId", ci.run_id AS "runId", ci.label AS "Label",
+                ci.flag_note AS "Note", ci.flagged_by AS "By",
+                to_char(r.run_date, 'YYYY-MM-DD') AS "Date", e.name AS "Assignee"
+           FROM checklist_items ci
+           JOIN checklist_runs r ON r.id = ci.run_id
+           LEFT JOIN employees e ON e.id = r.employee_id
+          WHERE ci.flagged = true
+          ORDER BY r.run_date DESC, ci.sort_order LIMIT 50`)).rows
+    : [];
+
   return {
     role: who.role,
     name: who.name,
@@ -931,6 +944,7 @@ async function getData(who) {
     pending: pending.rows,
     approved: approved.rows,
     meetingPending,
+    checklistFlags,
     allAwards: allAwards.rows,
     checklist,
     tiles: tilesConfig(),
