@@ -801,6 +801,13 @@
   /* End-of-day checklist */
   .navbtn.alert { color: var(--danger); }
   .navbtn.alert .navicon { animation: navpulse 1.2s ease-in-out infinite; }
+  /* Red indicator bar across the top of a tab that needs attention (mirrors the blue active bar). */
+  .navbtn.alert::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 3px;
+    background: var(--danger);
+  }
   @keyframes navpulse { 0%,100%{ transform:scale(1); opacity:1; } 50%{ transform:scale(1.18); opacity:.65; } }
   .cl-banner {
     background: var(--danger-soft); border:1px solid #fecaca; color:#7f1d1d;
@@ -2464,7 +2471,7 @@ function updateBubblesNav() {
   const badge = $("bubblesAlertBadge");
   if (badge) { badge.textContent = String(n); badge.hidden = !need; }
   const desc = $("bubblesTileDesc");
-  if (desc) desc.textContent = need ? (n + (n === 1 ? " thing" : " things") + " to approve") : "Rewards & leaderboard";
+  if (desc) desc.textContent = need ? (n + (n === 1 ? " notification" : " notifications")) : "Rewards & leaderboard";
   const rewardsTab = document.querySelector('.bottomnav .navbtn[data-view="rewards"]');
   if (rewardsTab) rewardsTab.classList.toggle("alert", need);
 }
