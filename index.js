@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '117';
+const APP_VERSION = '118';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -3441,6 +3441,88 @@ async function broadcastPush(who, body) {
   return { ok: true, ...res };
 }
 
+// ---------- Picks & Ships (external dashboard proxy) ----------
+// The picking-shipping dashboard is a separate app with NO CORS headers, so the
+// browser can't call it directly. We proxy it server-side for managers: pull its
+// live JSON, aggregate the per-picker picking numbers, and hand back a clean
+// shape for the "Picks & Ships" tab. Read-only — nothing is stored.
+const PICKSHIP_BASE = 'https://picking-shipping.up.railway.app';
+
+async function fetchJson(url, ms) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms || 8000);
+  try {
+    const r = await fetch(url, { signal: ac.signal, headers: { Accept: 'application/json' } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function getPickShip(who) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  let metrics, shipping, comparison;
+  try {
+    [metrics, shipping, comparison] = await Promise.all([
+      fetchJson(PICKSHIP_BASE + '/api/metrics'),
+      fetchJson(PICKSHIP_BASE + '/api/shipping'),
+      fetchJson(PICKSHIP_BASE + '/api/comparison'),
+    ]);
+  } catch (e) {
+    return { error: "Couldn't reach the picking & shipping dashboard right now. Try again in a moment." };
+  }
+
+  // Picking is per-picker: sum each picker's time-buckets into a daily total.
+  const byPicker = {};
+  ((metrics && metrics.overTime) || []).forEach(row => {
+    if (!row) return;
+    const name = row.picker ? String(row.picker) : 'Unknown';
+    if (!byPicker[name]) byPicker[name] = { picker: name, lines: 0, orders: 0 };
+    byPicker[name].lines += Number(row.lines) || 0;
+    byPicker[name].orders += Number(row.orders) || 0;
+  });
+  const pickers = Object.values(byPicker).sort((a, b) => b.lines - a.lines);
+  const nums = (metrics && metrics.numbers) || {};
+  const picking = {
+    pickers,
+    totalLines: (nums.lines && nums.lines.total != null) ? nums.lines.total : null,
+    totalOrders: (nums.orders && nums.orders.total != null) ? nums.orders.total : null,
+  };
+
+  // Shipping is team-level (no per-person names in the source).
+  const k = (shipping && shipping.kpis) || {};
+  const cfg = (shipping && shipping.config) || {};
+  const ship = {
+    shippedToday: k.todayCount != null ? k.todayCount : null,
+    totalShipped: k.totalShipped != null ? k.totalShipped : null,
+    carryover: k.carryoverCount != null ? k.carryoverCount : null,
+    target: cfg.orders_target != null ? cfg.orders_target : null,
+    pct: k.pct != null ? Math.round(k.pct) : null,
+    remaining: k.remaining != null ? k.remaining : null,
+    avgHr: k.avgHr != null ? Math.round(k.avgHr * 10) / 10 : null,
+    eod: k.eod != null ? Math.round(k.eod) : null,
+    revenue: k.totalRevenue != null ? Math.round(k.totalRevenue) : null,
+  };
+
+  // Day-over-day comparison ("as of this time of day" — apples to apples).
+  const today = (comparison && comparison.today) || null;
+  const cmp = comparison ? {
+    todayLines: today && today.asof ? today.asof.lines : null,
+    todayOrders: today && today.asof ? today.asof.orders : null,
+    weekday: today ? today.weekday : null,
+    benchmarks: ((comparison.benchmarks) || []).map(b => ({
+      label: b.label,
+      weekday: b.weekday,
+      lines: b.asof ? b.asof.lines : null,
+      orders: b.asof ? b.asof.orders : null,
+      found: !!b.found,
+    })),
+  } : null;
+
+  return { ok: true, picking, shipping: ship, comparison: cmp, fetchedAt: Date.now() };
+}
+
 // ---------- Login rate limiting (brute-force protection) ----------
 // The PIN pad is publicly reachable on the wall TV, so anyone could hammer it
 // guessing a PIN (or an admin password). We throttle repeated FAILED logins per
@@ -3627,6 +3709,7 @@ app.post('/', async (req, res) => {
         case 'updateSettings':         out = await updateSettings(who, body); break;
         case 'sendTestPush':           out = await sendTestPush(who); break;
         case 'broadcastPush':          out = await broadcastPush(who, body); break;
+        case 'getPickShip':            out = await getPickShip(who); break;
         default:                  out = { error: 'Unknown action: ' + action };
       }
     }

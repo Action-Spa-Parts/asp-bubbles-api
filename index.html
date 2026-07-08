@@ -863,6 +863,24 @@
   .cl-arow.flagged .cl-amain { color:var(--danger); }
   .cl-arow .cl-itime { font-size:11px; color:var(--muted); margin-top:3px; font-variant-numeric:tabular-nums; }
   .cl-runbody .cl-times { font-size:13px; color:var(--muted); margin:2px 0 10px; font-variant-numeric:tabular-nums; }
+  /* Picks & Ships tab */
+  .ps-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+  .ps-sec { margin-top:22px; }
+  .ps-sec h3 { font-size:14px; font-weight:700; color:var(--text); margin:0 0 10px; }
+  .ps-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:10px; }
+  .ps-kpi { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; box-shadow:var(--shadow-card); }
+  .ps-kpi-v { font-size:24px; font-weight:800; color:var(--text); font-variant-numeric:tabular-nums; }
+  .ps-kpi-l { font-size:12px; color:var(--muted); margin-top:2px; }
+  .ps-row { display:flex; align-items:center; gap:12px; padding:11px 14px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); margin-bottom:8px; box-shadow:var(--shadow-card); }
+  .ps-row .ps-name { font-weight:600; flex:1; display:flex; align-items:center; gap:10px; }
+  .ps-row .ps-lines { font-size:20px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .ps-row .ps-lines small { font-size:11px; font-weight:600; color:var(--muted); }
+  .ps-row .ps-orders { font-size:12px; color:var(--muted); min-width:64px; text-align:right; font-variant-numeric:tabular-nums; }
+  .ps-cmp { display:flex; justify-content:space-between; align-items:baseline; padding:9px 0; border-bottom:1px solid var(--border); font-size:14px; }
+  .ps-cmp:last-child { border-bottom:none; }
+  .ps-cmp .ps-cmp-l { color:var(--muted); }
+  .ps-cmp .ps-cmp-v { font-weight:600; font-variant-numeric:tabular-nums; }
+  .ps-foot { color:var(--muted); font-size:12px; margin-top:16px; }
   .cl-item.locked { opacity:0.45; }
   .cl-item .cl-lock { margin-left:auto; font-size:14px; }
   .cl-acat { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
@@ -1171,6 +1189,15 @@
     </div>
   </div>
 
+  <!-- ===== Picks & Ships tab (manager only) ===== -->
+  <div class="view" id="view-pickship" hidden>
+    <div class="ps-head">
+      <h2 class="section" style="margin:0;">Picks &amp; Ships — today</h2>
+      <button class="ghost" id="psRefresh">↻ Refresh</button>
+    </div>
+    <div id="pickShipBody"><div class="cl-meta">Loading…</div></div>
+  </div>
+
   </div><!-- /bubblesScreen -->
 
   <!-- ===== Closing Checklist app ===== -->
@@ -1342,6 +1369,9 @@
   </button>
   <button class="navbtn" data-view="earn">
     <span class="navicon">＋</span><span>How to earn</span>
+  </button>
+  <button class="navbtn" data-view="pickship" id="navPickShip" hidden>
+    <span class="navicon">📦</span><span>Picks &amp; Ships</span>
   </button>
 </nav>
 
@@ -2487,8 +2517,9 @@ function renderActivity() {
 }
 
 function switchView(view) {
+  if (view === "pickship" && session.role !== "manager") view = "balances";   // manager-only tab
   state.view = view;
-  ["balances", "rewards", "activity", "earn"].forEach(v => {
+  ["balances", "rewards", "activity", "earn", "pickship"].forEach(v => {
     $("view-" + v).hidden = (v !== view);
   });
   // Only the Bubbles nav buttons carry data-view; scope to them so this never
@@ -2496,6 +2527,7 @@ function switchView(view) {
   document.querySelectorAll("[data-view]").forEach(b => {
     b.classList.toggle("active", b.dataset.view === view);
   });
+  if (view === "pickship") loadPickShip();
   render();
 }
 
@@ -2523,6 +2555,8 @@ function updateTiles() {
 // meeting credits to approve, or approved rewards ready to hand out.
 function updateBubblesNav() {
   const isMgr = session.role === "manager";
+  const psTab = $("navPickShip");
+  if (psTab) psTab.hidden = !isMgr;   // Picks & Ships is manager-only
   const n = isMgr ? ((state.pending || []).length + (state.meetingPending || []).length + (state.approved || []).length + (state.checklistFlags || []).length) : 0;
   const need = n > 0;
   const tile = $("tileBubbles");
@@ -2533,6 +2567,81 @@ function updateBubblesNav() {
   if (desc) desc.textContent = need ? (n + (n === 1 ? " notification" : " notifications")) : "Rewards & leaderboard";
   const rewardsTab = document.querySelector('.bottomnav .navbtn[data-view="rewards"]');
   if (rewardsTab) rewardsTab.classList.toggle("alert", need);
+}
+
+/* ===== Picks & Ships (manager-only, proxied from the picking-shipping app) ===== */
+let psLoading = false;
+async function loadPickShip() {
+  if (session.role !== "manager") return;
+  if (psLoading) return;
+  psLoading = true;
+  const body = $("pickShipBody");
+  if (!state.pickShip) body.innerHTML = `<div class="cl-meta">Loading live picking &amp; shipping data…</div>`;
+  try {
+    const res = await apiCall("getPickShip", { pin: session.pin });
+    if (!res || res.error) {
+      body.innerHTML = `<div class="cl-banner info">${escapeHtml((res && res.error) || "Couldn't load picks & ships.")}</div>`;
+      return;
+    }
+    state.pickShip = res;
+    renderPickShip();
+  } catch (e) {
+    body.innerHTML = `<div class="cl-banner info">Network error loading picks &amp; ships. Tap Refresh to retry.</div>`;
+  } finally {
+    psLoading = false;
+  }
+}
+
+function renderPickShip() {
+  const d = state.pickShip;
+  if (!d) return;
+  const body = $("pickShipBody");
+  const p = d.picking || {}, s = d.shipping || {}, c = d.comparison || null;
+  const pickers = p.pickers || [];
+  const num = (v) => (v == null ? "—" : Number(v).toLocaleString());
+
+  // --- Picking: per-employee leaderboard ---
+  let html = `<div class="ps-sec" style="margin-top:4px;"><h3>Picking — by employee (today)</h3>`;
+  if (!pickers.length) {
+    html += `<div class="cl-meta">No picking recorded yet today.</div>`;
+  } else {
+    html += pickers.map((pk, i) => `
+      <div class="ps-row">
+        <div class="ps-name"><span class="rank ${i < 3 ? "top" : ""}">${i + 1}</span>${escapeHtml(pk.picker)}</div>
+        <div class="ps-lines">${num(pk.lines)} <small>lines</small></div>
+        <div class="ps-orders">${num(pk.orders)} orders</div>
+      </div>`).join("");
+    html += `<div class="cl-meta" style="margin-top:6px;">Team total: <strong>${num(p.totalLines)}</strong> lines · <strong>${num(p.totalOrders)}</strong> orders</div>`;
+  }
+  html += `</div>`;
+
+  // --- Shipping: team KPIs ---
+  const kpi = (label, val) => `<div class="ps-kpi"><div class="ps-kpi-v">${val}</div><div class="ps-kpi-l">${label}</div></div>`;
+  html += `<div class="ps-sec"><h3>Shipping (team)</h3><div class="ps-kpis">
+    ${kpi("Shipped today", num(s.shippedToday))}
+    ${kpi("of daily target", s.pct == null ? "—" : s.pct + "%")}
+    ${kpi("Remaining", num(s.remaining))}
+    ${kpi("Proj. end of day", num(s.eod))}
+    ${kpi("Per hour", s.avgHr == null ? "—" : num(s.avgHr))}
+    ${kpi("Revenue", s.revenue == null ? "—" : "$" + num(s.revenue))}
+  </div>`;
+  if (s.target != null) html += `<div class="cl-meta" style="margin-top:8px;">Target: ${num(s.target)} orders/day${s.carryover != null ? ` · ${num(s.carryover)} carried over` : ""}</div>`;
+  html += `</div>`;
+
+  // --- Comparison: today vs recent (by this time of day) ---
+  if (c && c.benchmarks && c.benchmarks.length) {
+    html += `<div class="ps-sec"><h3>Today so far vs. recent (by this time)</h3>`;
+    html += `<div class="ps-cmp"><span class="ps-cmp-l">Today${c.weekday ? " (" + escapeHtml(c.weekday) + ")" : ""}</span><span class="ps-cmp-v">${num(c.todayLines)} lines · ${num(c.todayOrders)} orders</span></div>`;
+    html += c.benchmarks.map(b => `
+      <div class="ps-cmp"><span class="ps-cmp-l">${escapeHtml(b.label || "")}${b.weekday ? " (" + escapeHtml(b.weekday) + ")" : ""}</span>
+      <span class="ps-cmp-v">${b.found ? (num(b.lines) + " lines · " + num(b.orders) + " orders") : "—"}</span></div>`).join("");
+    html += `</div>`;
+  }
+
+  const when = d.fetchedAt ? new Date(d.fetchedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+  html += `<div class="ps-foot">Live from the Picking &amp; Shipping dashboard${when ? " · updated " + when : ""}</div>`;
+
+  body.innerHTML = html;
 }
 
 // Top-level app screen switch: "home" | "bubbles" | "checklist".
@@ -5728,6 +5837,7 @@ $("teamClose").addEventListener("click", () => { $("teamAward").hidden = true; s
 document.querySelectorAll("[data-view]").forEach(btn => {
   btn.addEventListener("click", () => switchView(btn.dataset.view));
 });
+$("psRefresh").addEventListener("click", loadPickShip);
 
 $("homeBtn").addEventListener("click", () => showScreen("home"));
 $("tileBubbles").addEventListener("click", openBubbles);
