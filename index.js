@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '112';
+const APP_VERSION = '113';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -947,6 +947,9 @@ async function getData(who) {
     checklistFlags,
     allAwards: allAwards.rows,
     checklist,
+    checklistPenalty: latePenalty(),
+    lateFlagOn: lateFlagOn(),
+    deadlineLabel: deadlineLabel(),
     tiles: tilesConfig(),
     settings: isManager ? {
       alertEmail: settingStr('alert_email', ''),
@@ -1022,6 +1025,9 @@ async function getPublic() {
     boxSizes,
     resources,
     tiles: tilesConfig(),
+    checklistPenalty: latePenalty(),
+    lateFlagOn: lateFlagOn(),
+    deadlineLabel: deadlineLabel(),
     version: APP_VERSION,
   };
 }
@@ -1963,6 +1969,30 @@ async function penalizeLateChecklist(who, runId) {
      VALUES ($1, 'Late closing checklist', $2, $3, $4)`,
     [rows[0].employee_id, -amt, who.name, 'Not started by ' + deadlineLabel()]);
   await pool.query('UPDATE checklist_runs SET late_penalized_at = now() WHERE id = $1', [id]);
+  return { ok: true };
+}
+
+// Manager resolves a flagged checklist item from the Bubbles notification list.
+// Approve = the flag is valid → deduct the checklist penalty from the closer and
+// clear the flag. Deny = false alarm → just clear the flag. Manager only.
+async function resolveChecklistFlag(who, itemId, approve) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const iid = cleanInt(itemId);
+  if (iid === null) return { error: 'Bad item id' };
+  const { rows } = await pool.query(
+    `SELECT ci.id, ci.label, ci.flagged, r.employee_id
+       FROM checklist_items ci JOIN checklist_runs r ON r.id = ci.run_id
+      WHERE ci.id = $1`, [iid]);
+  if (!rows.length) return { error: 'Item not found' };
+  if (!rows[0].flagged) return { error: 'Already resolved' };
+  if (approve) {
+    if (!rows[0].employee_id) return { error: 'No one is assigned to that run' };
+    await pool.query(
+      `INSERT INTO awards (employee_id, metric, amount, awarded_by, note)
+       VALUES ($1, 'Checklist flag', $2, $3, $4)`,
+      [rows[0].employee_id, -latePenalty(), who.name, rows[0].label]);
+  }
+  await pool.query('UPDATE checklist_items SET flagged = false, flag_note = NULL WHERE id = $1', [iid]);
   return { ok: true };
 }
 
@@ -3454,6 +3484,7 @@ app.post('/', async (req, res) => {
         case 'reassignChecklistRun': out = await reassignChecklistRun(who, body); break;
         case 'deleteChecklistRun':   out = await deleteChecklistRun(who, body.runId); break;
         case 'penalizeLateChecklist': out = await penalizeLateChecklist(who, body.runId); break;
+        case 'resolveChecklistFlag': out = await resolveChecklistFlag(who, body.itemId, body.approve); break;
         // ----- Box Counter -----
         case 'getBoxSizes':   out = await getBoxSizes(who); break;
         case 'getBoxActivity': out = await getBoxActivity(who); break;

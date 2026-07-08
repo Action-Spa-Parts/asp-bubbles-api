@@ -2100,12 +2100,16 @@ function renderRewards() {
           <div class="muted" style="font-size:12.5px;">${escapeHtml(f.Date || "")}${f.Assignee ? " · " + escapeHtml(f.Assignee) : ""}${f.Note ? " — " + escapeHtml(f.Note) : ""}${f.By ? " (flagged by " + escapeHtml(f.By) + ")" : ""}</div>
         </div>
         <div class="req-actions">
-          <button class="approve" data-openrun="${f.runId}">Open in checklist</button>
+          <button class="approve" data-flagitem="${f.itemId}" data-approve="1" data-name="${escapeAttr(f.Assignee || "")}">Approve</button>
+          <button class="deny" data-flagitem="${f.itemId}" data-approve="0">Deny</button>
+          <button class="ghost" data-openrun="${f.runId}">Open in checklist</button>
         </div>
       </div>
     `).join("");
     $("clFlagsList").querySelectorAll("[data-openrun]").forEach(b =>
       b.addEventListener("click", () => { state.expandRun = parseInt(b.dataset.openrun, 10); state.checklistFilter = { name: "", date: "" }; showScreen("checklist"); }));
+    $("clFlagsList").querySelectorAll("[data-flagitem]").forEach(b =>
+      b.addEventListener("click", () => resolveFlagReq(parseInt(b.dataset.flagitem, 10), b.dataset.approve === "1", b.dataset.name)));
   } else {
     flagSec.hidden = true;
   }
@@ -2239,6 +2243,21 @@ async function resolveMeetingCreditReq(id, approve) {
   }
 }
 
+async function resolveFlagReq(itemId, approve, name) {
+  if (approve) {
+    const amt = state.checklistPenalty != null ? state.checklistPenalty : 10;
+    if (!confirm(`Approve this flag and deduct ${amt} bubbles from ${name || "the closer"}? You can undo it later in Activity.`)) return;
+  }
+  try {
+    const res = await apiCall("resolveChecklistFlag", { pin: session.pin, itemId: itemId, approve: approve });
+    if (res && res.error) { setStatus(res.error, "error"); }
+    else setStatus(approve ? "Flag approved — bubbles deducted." : "Flag dismissed.", "ok");
+    fetchData();
+  } catch (err) {
+    setStatus("Error: " + (err && err.message ? err.message : err), "error");
+  }
+}
+
 async function fulfillRequest(row) {
   try {
     const res = await apiCall("fulfill", { pin: session.pin, row: row });
@@ -2249,17 +2268,28 @@ async function fulfillRequest(row) {
   }
 }
 
+// Display-only "How to earn" entries for the closing-checklist penalties (driven
+// by the live Settings amount, not real editable rule rows).
+function checklistPenaltyRules() {
+  if (!state.lateFlagOn) return [];
+  const pen = state.checklistPenalty != null ? state.checklistPenalty : 10;
+  return [
+    { metric: "Late closing checklist", bubbles: -pen, category: "Closing Checklist", description: "Not starting the closing checklist by " + (state.deadlineLabel || "the deadline") + "." },
+    { metric: "Checked something not done", bubbles: -pen, category: "Closing Checklist", description: "Checking off a closing task you didn't actually do (flagged during review)." },
+  ];
+}
 function renderEarn() {
   const el = $("earnList");
-  const cats = [...new Set(state.rules.map(r => String(r.category || "").trim()).filter(Boolean))].sort();
+  const rules = state.rules.concat(checklistPenaltyRules());
+  const cats = [...new Set(rules.map(r => String(r.category || "").trim()).filter(Boolean))].sort();
   fillNameOptions($("earnCat"), cats, "All categories");
   $("earnCat").value = state.earnFilter;
-  if (!state.rules.length) {
+  if (!rules.length) {
     el.innerHTML = `<div class="empty"><h3>No rules</h3><div>Add ways to earn in ⚙ Manage → Earn rules.</div></div>`;
     return;
   }
   const byCat = {};
-  state.rules.forEach(r => {
+  rules.forEach(r => {
     if (state.earnFilter && String(r.category || "").trim() !== state.earnFilter) return;
     if (!byCat[r.category]) byCat[r.category] = [];
     byCat[r.category].push(r);
@@ -4167,7 +4197,7 @@ function runCardsHtml(runs, today, opts) {
                   ${paceById[it.id] ? `<div class="cl-itime">🕒 ${paceById[it.id].spent != null ? "spent " + fmtGap(paceById[it.id].spent) + " · " : ""}ticked ${fmtClockTime(paceById[it.id].t)}</div>` : ""}
                   ${it.flagged ? `<div class="cl-flagnote">⚑ ${escapeHtml(it.flag_note || "Flagged")}${it.flagged_by ? " — " + escapeHtml(it.flagged_by) : ""}</div>` : ""}
                 </div>
-                ${interactive ? `<div class="cl-abtns">${it.flagged ? `<button class="ghost" data-unflag="${it.id}">Unflag</button>` : `<button class="ghost" data-flag="${it.id}" data-label="${escapeAttr(it.label)}">Flag</button>`}</div>` : ""}
+                ${interactive && !it.flagged ? `<div class="cl-abtns"><button class="ghost" data-flag="${it.id}" data-label="${escapeAttr(it.label)}">Flag</button></div>` : ""}
               </div>`).join("")}
           `).join("") : `<div class="cl-meta" style="padding:8px 0;">No tasks were on this run.</div>`}
         </div>
@@ -4836,6 +4866,9 @@ function applyData(data) {
   state.approved   = data.approved || [];
   state.meetingPending = data.meetingPending || [];
   state.checklistFlags = data.checklistFlags || [];
+  state.checklistPenalty = data.checklistPenalty;
+  state.lateFlagOn = data.lateFlagOn;
+  state.deadlineLabel = data.deadlineLabel;
   state.settings   = data.settings || null;
   state.tiles      = data.tiles || {};
   state.checklist = data.checklist || null;

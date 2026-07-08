@@ -409,7 +409,7 @@ const REFRESH_MS = 20000;   // re-pull data every 20s
 const STALE_MS   = 70000;   // if no successful pull in this long, show "reconnecting"
 
 /* ===== State ===== */
-const state = { balances: [], rules: [], activity: [], checklist: null, boxSizes: [], resources: [], tiles: {}, boxSearch: { l: "", w: "", h: "" }, boxSort: "default", boxView: "all", screen: "home", view: "board", lastOk: 0, loadedVersion: null };
+const state = { balances: [], rules: [], activity: [], checklist: null, boxSizes: [], resources: [], tiles: {}, checklistPenalty: null, lateFlagOn: false, deadlineLabel: "", boxSearch: { l: "", w: "", h: "" }, boxSort: "default", boxView: "all", screen: "home", view: "board", lastOk: 0, loadedVersion: null };
 const $ = (id) => document.getElementById(id);
 
 /* ===== Helpers ===== */
@@ -525,6 +525,12 @@ function renderEarn() {
     category: String(r.Category || "Other").trim(),
     description: String(r.Description || "").trim(),
   })).filter(r => r.metric);
+
+  if (state.lateFlagOn) {
+    const pen = state.checklistPenalty != null ? state.checklistPenalty : 10;
+    rules.push({ metric: "Late closing checklist", bubbles: -pen, category: "Closing Checklist", description: "Not starting the closing checklist by " + (state.deadlineLabel || "the deadline") + "." });
+    rules.push({ metric: "Checked something not done", bubbles: -pen, category: "Closing Checklist", description: "Checking off a closing task you didn't actually do (flagged during review)." });
+  }
 
   if (!rules.length) {
     el.innerHTML = `<div class="empty"><h3>No rules yet</h3><div>Add earning rules in the manager app.</div></div>`;
@@ -810,6 +816,9 @@ async function fetchData() {
     state.boxSizes = data.boxSizes || [];
     state.resources = data.resources || [];
     state.tiles    = data.tiles || {};
+    state.checklistPenalty = data.checklistPenalty;
+    state.lateFlagOn = data.lateFlagOn;
+    state.deadlineLabel = data.deadlineLabel;
     state.lastOk   = Date.now();
     // Auto-update: if a new version is live, the unattended TV just reloads itself.
     if (data.version) {
