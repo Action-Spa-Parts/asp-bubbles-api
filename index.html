@@ -4027,7 +4027,13 @@ function renderChecklistEmployee() {
   body.innerHTML = html;
 
   const startBtn = $("clStartBtn");
-  if (startBtn) startBtn.addEventListener("click", startChecklistNow);
+  if (startBtn) startBtn.addEventListener("click", () => {
+    // Extra confirmation so nobody starts (and starts the timer) by accident.
+    askConfirm(
+      "Ready to start closing? The timer starts now, and you'll need to finish every task before you leave.",
+      startChecklistNow,
+      { okText: "Yes, start" });
+  });
 
   if (interactive) {
     body.querySelectorAll("input[data-cb]").forEach(cb => {
