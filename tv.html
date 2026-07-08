@@ -199,6 +199,9 @@
   .tv-signin:hover { filter: brightness(1.08); }
   .tv-mmbtn { font: inherit; font-size: 20px; font-weight: 800; color: #fff; background: var(--good); border: none; border-radius: 12px; padding: 12px 24px; cursor: pointer; box-shadow: var(--shadow-card); margin-left: auto; }
   .tv-mmbtn:hover { filter: brightness(1.08); }
+  /* Once today's morning meeting is claimed, grey the button out for the day. */
+  .tv-mmbtn.claimed { background: var(--border); color: var(--muted); cursor: default; box-shadow: none; }
+  .tv-mmbtn.claimed:hover { filter: none; }
 
   /* Morning-meeting PIN pad */
   .mm-overlay { position: fixed; inset: 0; z-index: 50; background: rgba(15,23,42,0.55); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; }
@@ -746,7 +749,24 @@ $("tvSignin").addEventListener("click", () => { window.location.href = "/"; });
 /* ===== Morning meeting credit (PIN pad) ===== */
 let mmPin = "";
 function mmRender() { $("mmDots").textContent = "•".repeat(mmPin.length); }
+// Grey out / re-enable the header button based on whether today's meeting is
+// already claimed (only one claim per day).
+function updateMeetingBtn() {
+  const btn = $("tvMeetingBtn");
+  if (!btn) return;
+  if (state.meetingClaimedToday) {
+    btn.classList.add("claimed");
+    btn.disabled = true;
+    const by = state.meetingClaimedBy ? " (" + state.meetingClaimedBy + ")" : "";
+    btn.textContent = "✓ Morning meeting claimed" + by;
+  } else {
+    btn.classList.remove("claimed");
+    btn.disabled = false;
+    btn.textContent = "🙋 I led the morning meeting";
+  }
+}
 function mmOpen() {
+  if (state.meetingClaimedToday) return;   // already claimed today — button is greyed
   mmPin = ""; mmRender();
   const m = $("mmMsg"); m.textContent = ""; m.className = "mm-msg";
   $("mmModal").hidden = false;
@@ -761,6 +781,8 @@ async function mmSubmit() {
     if (res && res.error) { m.textContent = res.error; m.className = "mm-msg err"; mmPin = ""; mmRender(); return; }
     m.textContent = "✓ Sent to managers for approval!"; m.className = "mm-msg ok";
     mmPin = ""; mmRender();
+    // Lock the button for the rest of the day right away (the next poll confirms).
+    state.meetingClaimedToday = true; updateMeetingBtn();
     setTimeout(mmClose, 1900);
   } catch (err) {
     m.textContent = "Network error — try again."; m.className = "mm-msg err";
@@ -819,6 +841,9 @@ async function fetchData() {
     state.checklistPenalty = data.checklistPenalty;
     state.lateFlagOn = data.lateFlagOn;
     state.deadlineLabel = data.deadlineLabel;
+    state.meetingClaimedToday = !!data.meetingClaimedToday;
+    state.meetingClaimedBy = data.meetingClaimedBy || null;
+    updateMeetingBtn();
     state.lastOk   = Date.now();
     // Auto-update: if a new version is live, the unattended TV just reloads itself.
     if (data.version) {

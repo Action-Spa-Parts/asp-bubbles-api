@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '114';
+const APP_VERSION = '115';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1020,6 +1020,12 @@ async function getPublic() {
     `SELECT name, url, category, description, icon
        FROM resource_links WHERE active = true ORDER BY sort_order, id`);
 
+  // Morning-meeting credit: has today's (single) claim already been made? Drives
+  // greying out the TV's "I led the morning meeting" button once someone claims.
+  const { rows: mmToday } = await pool.query(
+    `SELECT employee_name FROM meeting_credits
+      WHERE meeting_date = $1 AND status IN ('pending','approved') LIMIT 1`, [today]);
+
   return {
     balances: balances.rows,
     rules: rules.rows,
@@ -1027,6 +1033,8 @@ async function getPublic() {
     checklist,
     boxSizes,
     resources,
+    meetingClaimedToday: mmToday.length > 0,
+    meetingClaimedBy: mmToday.length ? mmToday[0].employee_name : null,
     tiles: tilesConfig(),
     checklistPenalty: latePenalty(),
     lateFlagOn: lateFlagOn(),
@@ -1284,7 +1292,10 @@ async function morningMeetingRule() {
 }
 
 // Someone taps "I led the morning meeting" on the TV and enters their PIN.
-// Creates a pending credit for a manager to approve. One claim per person/day.
+// Creates a pending credit for a manager to approve. The morning meeting is a
+// single daily event, so only ONE claim is allowed per day (whoever taps first).
+// A denied claim doesn't count — if the wrong person claimed it, the meeting's
+// real leader can still claim once a manager denies the bad one.
 async function requestMeetingCredit(who) {
   if (!who || who.role !== 'employee') return { error: 'Enter your personal PIN to claim the credit.' };
   const { rows: emp } = await pool.query('SELECT id FROM employees WHERE name = $1 AND active = true', [who.name]);
@@ -1292,9 +1303,12 @@ async function requestMeetingCredit(who) {
   const empId = emp[0].id;
   const today = (await pool.query(`SELECT to_char(${BIZ_DATE}, 'YYYY-MM-DD') AS d`)).rows[0].d;
   const dup = await pool.query(
-    `SELECT 1 FROM meeting_credits WHERE employee_id = $1 AND meeting_date = $2 AND status IN ('pending','approved')`,
-    [empId, today]);
-  if (dup.rows.length) return { error: "You've already claimed the morning meeting today." };
+    `SELECT employee_name FROM meeting_credits WHERE meeting_date = $1 AND status IN ('pending','approved') LIMIT 1`,
+    [today]);
+  if (dup.rows.length) {
+    const claimer = dup.rows[0].employee_name || 'Someone';
+    return { error: `${claimer} already claimed the morning meeting today.` };
+  }
   await pool.query(
     `INSERT INTO meeting_credits (employee_id, employee_name, meeting_date) VALUES ($1, $2, $3)`,
     [empId, who.name, today]);

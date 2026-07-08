@@ -2,7 +2,7 @@
 // the app opens instantly and survives a flaky connection. API data is always
 // fetched live (never cached).
 
-const CACHE = "action-spa-warehouse-v114";
+const CACHE = "action-spa-warehouse-v115";
 const SHELL = [
   "./",
   "./index.html",
