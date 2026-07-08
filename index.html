@@ -812,6 +812,9 @@
   .cl-cat { margin-bottom:16px; }
   .cl-cat .ctitle { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--accent); font-weight:700; margin-bottom:8px; }
   .cl-delrun-row { margin-top:10px; }
+  .cl-late-row { margin-top:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .cl-late { color:var(--danger); font-weight:700; font-size:13px; }
+  .cl-penalize { border-color:var(--danger) !important; color:var(--danger) !important; }
   .cl-delrun { color:var(--danger); font-size:13px; }
   .cl-delrun:hover { border-color:var(--danger); }
   .cl-item {
@@ -3838,11 +3841,12 @@ function eomSetWinner(name) { eomAdminAction("setEomWinner", { period: state.eom
 // badge) when it's this worker's turn and they haven't finished it yet.
 function updateChecklistNav() {
   const c = state.checklist;
-  const needsAttention = !!(c && c.mine && c.status !== "completed");
+  const mgrLate = !!(session.role === "manager" && c && c.late && !c.latePenalized);
+  const needsAttention = !!(c && c.mine && c.status !== "completed") || mgrLate;
   const tile = $("tileChecklist");
   if (tile) tile.classList.toggle("alert", needsAttention);
   const badge = $("clTurnBadge");
-  if (badge) badge.hidden = !needsAttention;
+  if (badge) { badge.textContent = mgrLate ? "late" : "your turn"; badge.hidden = !needsAttention; }
   // Show who's on closing duty today on the home-screen tile.
   const desc = $("clTileDesc");
   if (desc) {
@@ -3916,7 +3920,9 @@ function renderChecklistEmployee() {
     html = `<div class="cl-banner done">✓ You completed today's closing checklist. Thanks!</div>` + renderChecklistReadonly(c.items);
   } else if (!c.started) {
     // Not started yet — show the start prompt; the timer begins when they tap Start.
-    html = `<div class="cl-banner">It's your turn to close up tonight. 🔒<br><br>Tap <strong>Start</strong> when you're ready to begin. The checklist is timed so the manager can see how long closing takes.<br><br><strong>⚠️ Bubbles can be taken away if you don't complete the checklist, or if you check something off that wasn't actually done.</strong></div>`;
+    const deadlineWarn = c.lateFlagOn && c.deadlineLabel
+      ? `<br><br><strong>⏰ Start by ${escapeHtml(c.deadlineLabel)} or you'll be flagged and can lose bubbles.</strong>` : "";
+    html = `<div class="cl-banner">It's your turn to close up tonight. 🔒<br><br>Tap <strong>Start</strong> when you're ready to begin. The checklist is timed so the manager can see how long closing takes.${deadlineWarn}<br><br><strong>⚠️ Bubbles can be taken away if you don't complete the checklist, or if you check something off that wasn't actually done.</strong></div>`;
     html += `<div class="cl-submitbar"><button class="primary" id="clStartBtn">▶ Start closing checklist</button></div>`;
   } else {
     interactive = true;
@@ -4114,6 +4120,9 @@ function runCardsHtml(runs, today, opts) {
         </div>
         <div class="cl-runbody" id="clrun-${r.id}" ${open ? "" : "hidden"}>
           ${interactive && r.status !== "completed" ? reassignHtml(r) : ""}
+          ${interactive && r.late ? (r.late_penalized
+            ? `<div class="cl-late-row"><span class="cl-late">⚠ Not started on time — penalized ✓</span></div>`
+            : `<div class="cl-late-row"><span class="cl-late">⚠ Not started by ${escapeHtml((state.checklistAdmin && state.checklistAdmin.deadlineLabel) || "the deadline")} — late</span> <button class="ghost cl-penalize" data-penalize-run="${r.id}" data-name="${escapeAttr(r.assignee || "")}">Apply −${(state.checklistAdmin && state.checklistAdmin.latePenalty) || 10} penalty</button></div>`) : ""}
           ${interactive && r.status !== "completed" && today && r.run_date < today ? `<div class="cl-delrun-row"><button class="ghost cl-delrun" data-del-run="${r.id}" data-date="${escapeAttr(r.run_date)}">🗑 Delete this run</button></div>` : ""}
           ${r.items.length ? groupByCategory(r.items).map(g => `
             <div class="cl-acat" style="margin-top:10px;">${escapeHtml(g.category)}</div>
@@ -4155,6 +4164,13 @@ function wireRunCards(body) {
     const id = parseInt(b.dataset.delRun, 10);
     askConfirm(`Delete the incomplete checklist from ${fmtRunDate(b.dataset.date)}? This can't be undone.`,
       () => adminChecklistAction("deleteChecklistRun", { runId: id }), { okText: "Delete" });
+  }));
+  body.querySelectorAll("[data-penalize-run]").forEach(b => b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const id = parseInt(b.dataset.penalizeRun, 10);
+    const amt = (state.checklistAdmin && state.checklistAdmin.latePenalty) || 10;
+    askConfirm(`Deduct ${amt} bubbles from ${b.dataset.name || "the closer"} for not starting the checklist on time? You can undo it later in Activity.`,
+      () => adminChecklistAction("penalizeLateChecklist", { runId: id }), { okText: "Apply penalty" });
   }));
   body.querySelectorAll("[data-reassign-run]").forEach(sel => sel.addEventListener("change", (e) => {
     e.stopPropagation();
@@ -5131,6 +5147,16 @@ function renderSettingsAdmin() {
     </div>
 
     <div class="sset">
+      <div class="ftitle2">Closing checklist deadline</div>
+      <div class="muted" style="font-size:12.5px; margin:2px 0 8px;">Flag the closer if they haven't tapped Start by this time. A manager then applies the penalty (nothing is deducted automatically).</div>
+      <label class="sset-day"><input type="checkbox" id="setLateOn" ${s.lateFlagOn !== false ? "checked" : ""}> Flag late starts</label>
+      <div style="margin-top:10px; display:flex; gap:20px; flex-wrap:wrap; align-items:center;">
+        <label class="sset-day">Start by <input type="time" id="setDeadline" value="${escapeAttr(s.checklistDeadline || "16:45")}" style="font-size:16px; padding:8px;"></label>
+        <label class="sset-day">Penalty <input type="number" id="setPenalty" min="0" value="${escapeAttr(String(s.checklistLatePenalty != null ? s.checklistLatePenalty : 10))}" style="font-size:16px; padding:8px; width:80px;"> bubbles</label>
+      </div>
+    </div>
+
+    <div class="sset">
       <div class="ftitle2">App tiles (home screen)</div>
       <div class="muted" style="font-size:12.5px; margin:2px 0 8px;">Turn a tile off to hide that app from everyone's home screen.</div>
       <div class="sset-days">${SETTINGS_TILES.map(t => `<label class="sset-day"><input type="checkbox" data-tile="${t.key}" ${tiles[t.key] !== false ? "checked" : ""}> ${escapeHtml(t.label)}</label>`).join("")}</div>
@@ -5198,6 +5224,9 @@ async function saveSettings() {
   const tiles = {};
   document.querySelectorAll("[data-tile]").forEach(c => { tiles[c.dataset.tile] = c.checked; });
   const settings = { alertEmail: $("setEmail").value.trim(), closedDows, boxCountDow: parseInt($("setCountDay").value, 10), tiles };
+  settings.lateFlagOn = $("setLateOn").checked;
+  const dl = $("setDeadline").value; if (dl) settings.checklistDeadline = dl;
+  const pen = $("setPenalty").value; if (pen !== "") settings.checklistLatePenalty = parseInt(pen, 10);
   const pin = $("setPin").value.trim();
   if (pin) settings.managerPin = pin;
   adminError("");

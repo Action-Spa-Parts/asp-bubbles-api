@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '109';
+const APP_VERSION = '110';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -125,6 +125,9 @@ async function ensureSchema() {
   // manager-only timer is submitted_at - started_at. Added later → ALTER for
   // existing DBs (older runs have NULL started_at and just show no timer).
   await pool.query(`ALTER TABLE checklist_runs ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ`);
+  // When a manager applies the "not started by the deadline" penalty, we stamp
+  // this so the flag can't be penalized twice.
+  await pool.query(`ALTER TABLE checklist_runs ADD COLUMN IF NOT EXISTS late_penalized_at TIMESTAMPTZ`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS checklist_items (
       id         SERIAL PRIMARY KEY,
@@ -589,6 +592,16 @@ function boxCountDow() {
   return (n >= 0 && n <= 6) ? n : 5;
 }
 function alertEmail() { return settingStr('alert_email', MANAGER_EMAIL); }
+// Closing-checklist deadline: the assignee must tap Start by this time or the run
+// is flagged late (a manager can then apply the penalty). Editable in Settings.
+function lateFlagOn() { return settingStr('late_flag_on', '1') !== '0'; }
+function checklistDeadline() { const d = settingStr('checklist_deadline', '16:45'); return /^\d{1,2}:\d{2}$/.test(d) ? d : '16:45'; }
+function latePenalty() { const n = parseInt(settingStr('checklist_late_penalty', '10'), 10); return (n >= 0) ? n : 10; }
+function deadlineLabel() {
+  const [h, m] = checklistDeadline().split(':').map(Number);
+  const ap = h >= 12 ? 'PM' : 'AM'; const h12 = ((h + 11) % 12) + 1;
+  return h12 + ':' + String(m).padStart(2, '0') + ' ' + ap;
+}
 // The owner-set PIN works as the manager PIN; the env PIN always works too as a
 // permanent admin recovery (staff never knew it, so it's invisible to them).
 function managerPinMatches(p) {
@@ -629,6 +642,20 @@ async function updateSettings(who, body) {
     const n = parseInt(s.boxCountDow, 10);
     if (!(n >= 0 && n <= 6)) return { error: 'Pick a valid box-count day.' };
     await setSetting('box_count_dow', String(n));
+  }
+  if (s.lateFlagOn != null) {
+    await setSetting('late_flag_on', s.lateFlagOn ? '1' : '0');
+  }
+  if (typeof s.checklistDeadline === 'string' && s.checklistDeadline.trim() !== '') {
+    const d = s.checklistDeadline.trim();
+    const m = /^(\d{1,2}):(\d{2})$/.exec(d);
+    if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return { error: 'Deadline must be a valid time like 16:45.' };
+    await setSetting('checklist_deadline', d);
+  }
+  if (s.checklistLatePenalty != null) {
+    const n = parseInt(s.checklistLatePenalty, 10);
+    if (!(n >= 0)) return { error: 'Penalty must be 0 or more.' };
+    await setSetting('checklist_late_penalty', String(n));
   }
   if (s.tiles && typeof s.tiles === 'object') {
     const cur = settingJson('tiles', {});
@@ -912,6 +939,9 @@ async function getData(who) {
       closedDows: closedDows(),
       boxCountDow: boxCountDow(),
       managerPinSet: !!settingStr('manager_pin', ''),
+      lateFlagOn: lateFlagOn(),
+      checklistDeadline: checklistDeadline(),
+      checklistLatePenalty: latePenalty(),
     } : null,
     version: APP_VERSION,
   };
@@ -1751,10 +1781,22 @@ async function checklistSummary(who) {
             COUNT(*) FILTER (WHERE checked)::int AS checked,
             COUNT(*) FILTER (WHERE flagged)::int AS flagged
        FROM checklist_items WHERE run_id = $1`, [run.id]);
+  let late = false;
+  if (lateFlagOn()) {
+    const { rows: lr } = await pool.query(
+      `SELECT (CASE WHEN $1::timestamptz IS NOT NULL
+                      THEN ($1::timestamptz AT TIME ZONE 'America/Los_Angeles') > (${BIZ_DATE} + $2::time)
+                    WHEN $3 <> 'completed'
+                      THEN (now() AT TIME ZONE 'America/Los_Angeles') > (${BIZ_DATE} + $2::time)
+                    ELSE false END) AS late`,
+      [run.started_at, checklistDeadline(), run.status]);
+    late = !!lr[0].late;
+  }
   return {
     date: run.run_date, assignee, status: run.status,
     mine: !!(who && who.role === 'employee' && assignee === who.name),
     total: rows[0].total, checked: rows[0].checked, flagged: rows[0].flagged,
+    late, latePenalized: !!run.late_penalized_at, deadlineLabel: deadlineLabel(),
   };
 }
 
@@ -1765,9 +1807,17 @@ async function runsWithItems(limit) {
     SELECT r.id, to_char(r.run_date, 'YYYY-MM-DD') AS run_date, r.status, r.submitted_at,
            r.started_at,
            EXTRACT(EPOCH FROM (r.submitted_at - r.started_at))::int AS duration_secs,
+           ($2 AND (
+             CASE WHEN r.started_at IS NOT NULL
+                    THEN (r.started_at AT TIME ZONE 'America/Los_Angeles') > (r.run_date + $3::time)
+                  WHEN r.status <> 'completed' AND r.run_date = ${BIZ_DATE}
+                    THEN (now() AT TIME ZONE 'America/Los_Angeles') > (r.run_date + $3::time)
+                  ELSE false END
+           )) AS late,
+           (r.late_penalized_at IS NOT NULL) AS late_penalized,
            e.name AS assignee
       FROM checklist_runs r LEFT JOIN employees e ON e.id = r.employee_id
-     ORDER BY r.run_date DESC LIMIT $1`, [limit]);
+     ORDER BY r.run_date DESC LIMIT $1`, [limit, lateFlagOn(), checklistDeadline()]);
   const ids = runs.map(r => r.id);
   const byRun = {};
   if (ids.length) {
@@ -1792,11 +1842,12 @@ async function getChecklist(who) {
   // The timer (started_at / duration / per-item checked_at) is manager-only —
   // strip it from the employee-facing payload so it's never exposed to employees.
   const stripItemTiming = its => (its || []).map(({ checked_at, ...i }) => i);
-  const stripTiming = ({ started_at, duration_secs, items, ...rest }) =>
+  const stripTiming = ({ started_at, duration_secs, late, late_penalized, items, ...rest }) =>
     ({ ...rest, items: stripItemTiming(items) });
   const history = recent.filter(r => r.run_date !== today).map(stripTiming);   // past days only
+  const base = { deadlineLabel: deadlineLabel(), lateFlagOn: lateFlagOn() };
   if (!run) {
-    return { date: today, today, assignee: null, status: null, mine: false, items: [], history };
+    return { date: today, today, assignee: null, status: null, mine: false, items: [], history, ...base };
   }
   const assignee = await nameForEmpId(run.employee_id);
   const todayRow = recent.find(r => r.id === run.id);
@@ -1806,7 +1857,7 @@ async function getChecklist(who) {
     submittedAt: run.submitted_at,
     started: !!run.started_at,     // has the assignee tapped "Start"? (drives the start prompt)
     items: todayRow ? stripItemTiming(todayRow.items) : [],
-    history,
+    history, ...base,
   };
 }
 
@@ -1879,6 +1930,28 @@ async function checkChecklistItem(who, itemId, checked) {
   return { ok: true, total: cnt[0].total, done: cnt[0].done };
 }
 
+// Manager applies the "not started by the deadline" penalty to a flagged run:
+// deducts the configured bubbles from the assigned closer (reversible like any
+// award) and marks the run penalized so it can't be double-charged. Manager only.
+async function penalizeLateChecklist(who, runId) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const id = cleanInt(runId);
+  if (id === null) return { error: 'Bad run id' };
+  const { rows } = await pool.query(
+    `SELECT r.id, r.employee_id, r.late_penalized_at, e.name AS name
+       FROM checklist_runs r LEFT JOIN employees e ON e.id = r.employee_id WHERE r.id = $1`, [id]);
+  if (!rows.length) return { error: 'Run not found' };
+  if (rows[0].late_penalized_at) return { error: 'Already penalized' };
+  if (!rows[0].employee_id) return { error: 'No one is assigned to that run' };
+  const amt = latePenalty();
+  await pool.query(
+    `INSERT INTO awards (employee_id, metric, amount, awarded_by, note)
+     VALUES ($1, 'Late closing checklist', $2, $3, $4)`,
+    [rows[0].employee_id, -amt, who.name, 'Not started by ' + deadlineLabel()]);
+  await pool.query('UPDATE checklist_runs SET late_penalized_at = now() WHERE id = $1', [id]);
+  return { ok: true };
+}
+
 // Read-only view of the current rotation cycle, in order, marking who has gone
 // and who's up today — so a manager can see the expected order (esp. when
 // shifting someone out). Mirrors how ensureTodayRun() picks.
@@ -1921,7 +1994,8 @@ async function getChecklistAdmin(who) {
        FROM employees e LEFT JOIN checklist_runs r ON r.employee_id = e.id
       WHERE e.active = true
       GROUP BY e.id, e.name ORDER BY e.name`);
-  return { today: await todayStr(), runs: await runsWithItems(21), employees, rotation: await rotationView() };
+  return { today: await todayStr(), runs: await runsWithItems(21), employees, rotation: await rotationView(),
+           deadlineLabel: deadlineLabel(), latePenalty: latePenalty(), lateFlagOn: lateFlagOn() };
 }
 
 // Flag a task as missed/wrong, with an optional bubble deduction in one step.
@@ -3365,6 +3439,7 @@ app.post('/', async (req, res) => {
         case 'reshuffleChecklist':   out = await reshuffleChecklist(who); break;
         case 'reassignChecklistRun': out = await reassignChecklistRun(who, body); break;
         case 'deleteChecklistRun':   out = await deleteChecklistRun(who, body.runId); break;
+        case 'penalizeLateChecklist': out = await penalizeLateChecklist(who, body.runId); break;
         // ----- Box Counter -----
         case 'getBoxSizes':   out = await getBoxSizes(who); break;
         case 'getBoxActivity': out = await getBoxActivity(who); break;
