@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '119';
+const APP_VERSION = '120';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -3479,17 +3479,32 @@ async function fetchJson(url, ms) {
 const PICK_LINE_GOAL = 100;
 
 // Sum the picking-shipping "overTime" buckets into per-picker daily totals,
-// sorted most lines first.
+// sorted most lines (picks) first. Also estimates picks-per-hour from each
+// picker's active window: the source has no per-person hours, so we use the span
+// from the start of their first 15-min bucket to the end of their last one.
 function aggregatePickers(metrics) {
   const byPicker = {};
   ((metrics && metrics.overTime) || []).forEach(row => {
     if (!row) return;
     const name = row.picker ? String(row.picker) : 'Unknown';
-    if (!byPicker[name]) byPicker[name] = { picker: name, lines: 0, orders: 0 };
-    byPicker[name].lines += Number(row.lines) || 0;
-    byPicker[name].orders += Number(row.orders) || 0;
+    if (!byPicker[name]) byPicker[name] = { picker: name, lines: 0, orders: 0, first: null, last: null };
+    const o = byPicker[name];
+    o.lines += Number(row.lines) || 0;
+    o.orders += Number(row.orders) || 0;
+    const end = Number(row.bucket_end_sec);
+    if (Number.isFinite(end)) {
+      if (o.first == null || end < o.first) o.first = end;
+      if (o.last == null || end > o.last) o.last = end;
+    }
   });
-  return Object.values(byPicker).sort((a, b) => b.lines - a.lines);
+  return Object.values(byPicker).map(o => {
+    let pph = null;
+    if (o.first != null && o.last != null) {
+      const hours = ((o.last - o.first) + 900) / 3600;   // +900s to include the first bucket's 15 min
+      if (hours > 0) pph = Math.round(o.lines / hours);
+    }
+    return { picker: o.picker, lines: o.lines, orders: o.orders, pph };
+  }).sort((a, b) => b.lines - a.lines);
 }
 
 // Record/refresh today's per-picker totals in pick_daily (idempotent upsert).
