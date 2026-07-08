@@ -1559,6 +1559,7 @@
           <div class="field"><label>Description (optional)</label><input type="text" id="ruleDesc" placeholder="Short explanation"></div>
           <div class="checkrow"><input type="checkbox" id="ruleTeam"><label for="ruleTeam">Whole-team rule (appears under “Award whole team”)</label></div>
           <div class="formbtns">
+            <button class="ghost danger" id="ruleDelete" hidden style="margin-right:auto;">Delete</button>
             <button class="ghost" id="ruleCancel">Cancel</button>
             <button class="primary" id="ruleSave">Save</button>
           </div>
@@ -2075,6 +2076,7 @@ function renderRewards() {
         <div>
           <strong>${escapeHtml(p.Name)}</strong> led the morning meeting
           <span class="muted">(${escapeHtml(p.Date || "")})</span>
+          <span style="color:var(--good); font-weight:700; margin-left:6px;">+${state.meetingCreditAmount != null ? state.meetingCreditAmount : 5}</span>
         </div>
         <div class="req-actions">
           <button class="approve" data-row="${p._row}" data-approve="1">Approve</button>
@@ -2097,7 +2099,7 @@ function renderRewards() {
       <div class="req-row">
         <div>
           <span style="color:var(--danger);">⚑</span> <strong>${escapeHtml(f.Label)}</strong>
-          <div class="muted" style="font-size:12.5px;">${escapeHtml(f.Date || "")}${f.Assignee ? " · " + escapeHtml(f.Assignee) : ""}${f.Note ? " — " + escapeHtml(f.Note) : ""}${f.By ? " (flagged by " + escapeHtml(f.By) + ")" : ""}</div>
+          <div class="muted" style="font-size:12.5px;">${escapeHtml(f.Date || "")} <span style="color:var(--danger); font-weight:700;">−${state.checklistPenalty != null ? state.checklistPenalty : 10}</span>${f.Assignee ? " · " + escapeHtml(f.Assignee) : ""}${f.Note ? " — " + escapeHtml(f.Note) : ""}${f.By ? " (flagged by " + escapeHtml(f.By) + ")" : ""}</div>
         </div>
         <div class="req-actions">
           <button class="approve" data-flagitem="${f.itemId}" data-approve="1" data-name="${escapeAttr(f.Assignee || "")}">Approve</button>
@@ -4867,6 +4869,7 @@ function applyData(data) {
   state.meetingPending = data.meetingPending || [];
   state.checklistFlags = data.checklistFlags || [];
   state.checklistPenalty = data.checklistPenalty;
+  state.meetingCreditAmount = data.meetingCreditAmount;
   state.lateFlagOn = data.lateFlagOn;
   state.deadlineLabel = data.deadlineLabel;
   state.settings   = data.settings || null;
@@ -5409,6 +5412,8 @@ function showRuleForm(rule) {
   fillRuleCategorySelect(rule ? (rule.category || "") : "");
   $("ruleDesc").value = rule ? (rule.description || "") : "";
   $("ruleTeam").checked = rule ? !!rule.teamWide : false;
+  const del = $("ruleDelete");
+  if (del) { del.hidden = !rule; del.dataset.id = rule ? rule.id : ""; del.dataset.name = rule ? (rule.metric || "") : ""; }
   adminError("");
   revealAdminForm("ruleForm", "ruleMetric");
 }
@@ -5811,6 +5816,12 @@ document.querySelectorAll(".atab").forEach(b => b.addEventListener("click", () =
 $("ruleAddBtn").addEventListener("click", () => showRuleForm(null));
 $("ruleCategory").addEventListener("change", onRuleCategoryChange);
 $("ruleCancel").addEventListener("click", () => { $("ruleForm").hidden = true; adminError(""); });
+$("ruleDelete").addEventListener("click", (e) => {
+  const id = parseInt(e.currentTarget.dataset.id, 10);
+  if (!id) return;
+  askConfirm(`Delete the earn rule "${e.currentTarget.dataset.name || ""}"? This can't be undone. (Past awards already given are unaffected.)`,
+    () => adminSave("deleteRule", { id: id }), { okText: "Delete" });
+});
 $("ruleSave").addEventListener("click", saveRule);
 $("rewardAddBtn").addEventListener("click", () => showRewardForm(null));
 $("rewardCancel").addEventListener("click", () => { $("rewardForm").hidden = true; adminError(""); });

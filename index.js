@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '113';
+const APP_VERSION = '114';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -920,6 +920,8 @@ async function getData(who) {
            FROM meeting_credits WHERE status = 'pending' ORDER BY requested_at`)).rows
     : [];
 
+  const meetingCreditAmount = isManager ? (await morningMeetingRule()).amount : null;
+
   // Open (unresolved) checklist flags — surfaced to the manager as notifications.
   const checklistFlags = isManager
     ? (await pool.query(
@@ -944,6 +946,7 @@ async function getData(who) {
     pending: pending.rows,
     approved: approved.rows,
     meetingPending,
+    meetingCreditAmount,
     checklistFlags,
     allAwards: allAwards.rows,
     checklist,
@@ -1417,6 +1420,17 @@ async function setRuleActive(who, id, active) {
   const rid = cleanInt(id);
   if (rid === null) return { error: 'Bad rule id' };
   await pool.query(`UPDATE rules SET active=$1 WHERE id=$2`, [!!active, rid]);
+  return { ok: true };
+}
+
+// Permanently delete an earn rule. Awards store the metric as plain text (not a
+// link to rules), so past awards are unaffected. Manager only.
+async function deleteRule(who, id) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const rid = cleanInt(id);
+  if (rid === null) return { error: 'Bad rule id' };
+  const { rowCount } = await pool.query('DELETE FROM rules WHERE id = $1', [rid]);
+  if (!rowCount) return { error: 'Rule not found' };
   return { ok: true };
 }
 
@@ -3452,6 +3466,7 @@ app.post('/', async (req, res) => {
         case 'addRule':           out = await addRule(who, body.rule); break;
         case 'updateRule':        out = await updateRule(who, body.rule); break;
         case 'setRuleActive':     out = await setRuleActive(who, body.id, body.active); break;
+        case 'deleteRule':        out = await deleteRule(who, body.id); break;
         case 'addReward':         out = await addReward(who, body.reward); break;
         case 'updateReward':      out = await updateReward(who, body.reward); break;
         case 'setRewardActive':   out = await setRewardActive(who, body.id, body.active); break;
