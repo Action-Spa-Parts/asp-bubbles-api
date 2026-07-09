@@ -2849,7 +2849,13 @@ const app = express();
 // proxy's. Trusting the proxy makes req.ip reflect the real client (from
 // X-Forwarded-For) — needed so the login rate-limiter buckets per actual device,
 // not per proxy (which would make the whole warehouse share one bucket).
-app.set('trust proxy', true);
+//
+// SECURITY: trust EXACTLY ONE hop (Railway's edge), not `true` (trust all). With
+// `true`, Express takes the left-most X-Forwarded-For value, which the *client*
+// controls — so an attacker could send a fresh fake IP on every request and never
+// trip the login throttle. `1` makes Express use the IP Railway's edge appended
+// (the real client), ignoring any client-forged prefix. Do NOT change back to true.
+app.set('trust proxy', 1);
 app.use(cors({ origin: true }));
 // PWA posts JSON as text/plain (to avoid CORS preflight in the old setup).
 // Accept any content-type and parse manually.
