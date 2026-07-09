@@ -132,7 +132,9 @@
     padding: 7px 11px;
     cursor: pointer;
   }
-  input[type=text] { cursor: text; min-width: 200px; }
+  input[type=text] { cursor: text; min-width: 0; max-width: 100%; }
+  /* Keep the desktop search/filter inputs comfortably wide, but let them shrink on phones. */
+  .toolbar input[type=text], .filterbar input[type=text] { flex: 1 1 180px; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.primary:hover { filter: brightness(1.08); }
   button.ghost:hover { background: #f0efeb; }
@@ -419,6 +421,7 @@
     position: relative;
   }
   .navbtn .navicon { font-size: 18px; line-height: 1; }
+  .navbtn span:last-child { line-height: 1.12; }   /* tidy wrap for long (Spanish) labels */
   .navbtn.active { color: var(--accent); font-weight: 600; }
   /* Full-width blue indicator bar across the top of the active tab. */
   .navbtn.active::before {
@@ -516,7 +519,7 @@
   body { padding-bottom: 70px; }
 
   /* Admin (Manage) modal */
-  .admin-tabs { display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--border); }
+  .admin-tabs { display:flex; flex-wrap:wrap; row-gap:2px; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--border); }
   .atab {
     background:none; border:none; border-bottom:2px solid transparent;
     padding:9px 12px; font:inherit; font-weight:600; font-size:13px;
@@ -689,10 +692,10 @@
   .lp-vfy-code { font-size:18px; font-weight:800; letter-spacing:-0.01em; }
   .lp-vfy-desc { font-size:13px; line-height:1.3; margin-top:2px; }
   .lp-previewwrap { display:flex; flex-direction:column; align-items:center; gap:6px; }
-  .lp-label { width:300px; height:150px; background:#fff; border:1px solid #d4d4d4; border-radius:6px; box-shadow:var(--shadow-card); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:10px; }
+  .lp-label { width:300px; max-width:100%; height:150px; background:#fff; border:1px solid #d4d4d4; border-radius:6px; box-shadow:var(--shadow-card); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:10px; }
   .lp-desc { font-size:12px; color:#000; text-align:center; max-width:280px; line-height:1.2; }
   .lp-num { font-size:28px; font-weight:800; color:#000; line-height:1; letter-spacing:.5px; word-break:break-all; text-align:center; }
-  .lp-bc { width:260px; height:46px; }
+  .lp-bc { width:260px; max-width:100%; height:46px; }
   .lp-cap { font-size:12px; color:var(--muted); }
   .lp-actions { display:flex; gap:10px; }
   .lp-actions .primary { flex:1; font-size:17px; padding:15px; }
@@ -2273,37 +2276,6 @@ function esStart() {
   esObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
 }
 if (aspLangEs()) { if (document.body) esStart(); else window.addEventListener("DOMContentLoaded", esStart); }
-
-/* ---------- Offline-fallback sample data (only used if the server call fails) ---------- */
-
-const SAMPLE_BALANCES = [
-  { Name: "Anthony", Balance: 555 },
-  { Name: "Jordin",  Balance: 555 },
-  { Name: "Tommy",   Balance: 530 },
-  { Name: "Derisk",  Balance: 475 },
-  { Name: "Seedien", Balance: 362 },
-  { Name: "Josh",    Balance: 356 },
-  { Name: "Angel",   Balance: 245 },
-];
-
-const SAMPLE_RULES = [
-  { Metric: "Employee of the month",                    Bubbles: 200,  Category: "Culture",      Description: "Employee of the month" },
-  { Metric: "Shipping errors <10",                      Bubbles: 25,   Category: "Quality",      Description: "Errors below 10 at the end of the month — whole team" },
-  { Metric: "100+ picks before 12 (160 Mon and Tue)",   Bubbles: 20,   Category: "Productivity", Description: "100+ picks before noon — whole team" },
-  { Metric: "Above & beyond",                           Bubbles: 20,   Category: "Culture",      Description: "Extra help / notable initiative" },
-  { Metric: "100% cut off goal met",                    Bubbles: 15,   Category: "Quality",      Description: "Meet 12:00 cut off time — whole team" },
-  { Metric: "Top picker",                               Bubbles: 10,   Category: "Productivity", Description: "Top performer daily" },
-  { Metric: "Lead huddle",                              Bubbles: 5,    Category: "Leadership",   Description: "Lead huddle / training" },
-  { Metric: "Pick over 100 lines",                      Bubbles: 5,    Category: "Productivity", Description: "Pick over 100 lines — individual" },
-  { Metric: "Being late",                               Bubbles: -10,  Category: "Culture",      Description: "Miss 8:30 huddle (can repeat)" },
-];
-
-// Embedded from bubbles_rewards_catalog.xlsx — used by the future Catalog screen.
-const SAMPLE_CATALOG = [
-  { Reward: "Coffee",         Cost: 50,  Description: "Starbucks on us" },
-  { Reward: "Gift Card $10",  Cost: 50,  Description: "Redeem for a gift card" },
-  { Reward: "Lunch on us",    Cost: 180, Description: "Lunch on us (has to be approved)" },
-];
 
 /* ---------- App state ---------- */
 
