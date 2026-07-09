@@ -2029,7 +2029,38 @@ const ES_DICT = {
   "Remove from app":"Quitar de la app","Restore":"Restaurar","Deactivate":"Desactivar","Reactivate":"Reactivar","Edit admin":"Editar administrador","New password (blank = keep current)":"Contraseña nueva (en blanco = mantener la actual)",
   "wants admin access":"quiere acceso de administrador","Pending approval":"Pendiente de aprobación","Task text":"Texto de la tarea","Section":"Sección","Order (lower shows first)":"Orden (menor aparece primero)","Edit task":"Editar tarea","General":"General","order":"orden",
   "Changes apply to tomorrow's checklist onward — today's is already set.":"Los cambios aplican a partir de la lista de mañana — la de hoy ya está definida.","balance":"saldo",
-  "Add printer":"Agregar impresora","Add a printer":"Agregar impresora","Refresh now":"Actualizar ahora"
+  "Add printer":"Agregar impresora","Add a printer":"Agregar impresora","Refresh now":"Actualizar ahora",
+  // ---- Current database content (earn rules, rewards, checklist tasks, categories) ----
+  // Categories
+  "Culture":"Cultura","Quality":"Calidad","Productivity":"Productividad","Leadership":"Liderazgo","Unprofessionalism":"Falta de profesionalismo",
+  // Earn-rule names (metrics)
+  "Employee of the month":"Empleado del mes","Shipping errors <10":"Errores de envío <10","100+ picks before 12 (160 Mon and Tue)":"100+ piezas antes de las 12 (160 lun y mar)",
+  "Above & beyond":"Más allá de lo esperado","100% cut off goal met":"Meta de corte 100% cumplida","Top picker":"Mejor surtidor","Lead huddle":"Dirigir la junta",
+  "Pick over 100 lines":"Surtir más de 100 líneas","Being late":"Llegar tarde","Missed a day - No notice":"Faltó un día - Sin aviso",
+  "Unlabeled item found on packing station":"Artículo sin etiqueta en la estación de empaque","Unlabeled item reported by email":"Artículo sin etiqueta reportado por correo",
+  "Checklist flag":"Marca de la lista","Morning Meeting":"Junta matutina","Compliance Productivity":"Productividad de cumplimiento",
+  // Earn-rule descriptions
+  "Errors below 10 at end of month — whole team":"Errores por debajo de 10 al fin de mes — todo el equipo","100+ picks before noon — whole team":"100+ piezas antes del mediodía — todo el equipo",
+  "Extra help / notable initiative":"Ayuda extra / iniciativa destacada","Meet 12:00 cut-off time — whole team":"Cumplir la hora de corte de las 12:00 — todo el equipo",
+  "Top performer daily":"Mejor desempeño del día","Lead huddle / training":"Dirigir la junta / capacitación","Pick over 100 lines — individual":"Surtir más de 100 líneas — individual",
+  "Miss 8:30 huddle (can repeat)":"Faltar a la junta de 8:30 (puede repetirse)","Miss a day with no notice.":"Faltar un día sin aviso.",
+  "Unlabeled item found by manager — whole team":"Artículo sin etiqueta encontrado por el gerente — todo el equipo","Email comes in showing item w/o label":"Llega un correo mostrando un artículo sin etiqueta",
+  // Rewards + descriptions
+  "Coffee":"Café","Gift Card $10":"Tarjeta de regalo $10","Lunch on us":"Almuerzo por nuestra cuenta","$100 Giftcard":"Tarjeta de regalo $100",
+  "Starbucks on us":"Starbucks por nuestra cuenta","Redeem for a $10 gift card":"Canjea por una tarjeta de regalo de $10",
+  "Lunch on us (has to be approved)":"Almuerzo por nuestra cuenta (debe ser aprobado)","Redeem for a $100 gift card":"Canjea por una tarjeta de regalo de $100",
+  // Closing-checklist task labels
+  "Aisles and walkways clear; pallets and carts put away.":"Pasillos y andadores despejados; tarimas y carritos guardados.","All A/C units are turned OFF.":"Todas las unidades de A/C están APAGADAS.",
+  "All entry doors locked.":"Todas las puertas de entrada con llave.","All exterior and interior LIGHTS are turned OFF.":"Todas las LUCES exteriores e interiores están APAGADAS.",
+  "All fans are turned OFF.":"Todos los ventiladores están APAGADOS.","All gates are CLOSED and locked.":"Todas las rejas están CERRADAS y con llave.",
+  "All overhead / dock doors are CLOSED and secured.":"Todas las puertas de andén están CERRADAS y aseguradas.","Computers / monitors at workstations shut down or locked.":"Computadoras / monitores en las estaciones apagados o bloqueados.",
+  "Forklifts / pallet jacks parked and plugged in to charge.":"Montacargas / patines parqueados y conectados a cargar.","Heaters / space heaters are turned OFF (if applicable).":"Calentadores / calefactores están APAGADOS (si aplica).",
+  "Put the checklist tablet back on its charger and turn off (top right button)":"Regresa la tableta de la lista a su cargador y apágala (botón superior derecho)",
+  "Refill all printer paper trays (label, packing slip, and document printers).":"Rellena las bandejas de papel de todas las impresoras (etiquetas, packing slip y documentos).",
+  "Replace any low or empty toner / ink and set out spares if needed.":"Reemplaza tóner / tinta bajo o vacío y deja repuestos si hace falta.",
+  "Restock packing tape, labels, and shipping supplies at each station.":"Reabastece cinta de empaque, etiquetas y material de envío en cada estación.",
+  "Scanners and handheld devices placed on chargers.":"Escáneres y dispositivos de mano puestos a cargar.","Trash and cardboard removed; recycling emptied.":"Basura y cartón retirados; reciclaje vaciado.",
+  "Workstations wiped down and organized for the next shift.":"Estaciones limpiadas y organizadas para el siguiente turno."
 };
 
 // Patterns for common dynamic strings (numbers/names filled in).
@@ -2113,7 +2144,10 @@ const ES_RX = [
   [/^Remove box size (.+)\? It will no longer show on the count or inventory\.$/, m => `¿Quitar el tamaño ${m[1]}? Ya no aparecerá en el conteo ni el inventario.`],
   [/^Disregard (.+)\? It won't need to be counted\. You can bring it back under "Sizes & inventory"\.$/, m => `¿Ignorar ${m[1]}? No se necesitará contar. Puedes traerlo de vuelta en "Tamaños e inventario".`],
   [/^In stock: (\d+) · low alert ≤ (\d+)$/, m => `En stock: ${m[1]} · alerta baja ≤ ${m[2]}`],
-  [/^Count for (.+)$/, m => `Conteo de ${m[1]}`]
+  [/^Count for (.+)$/, m => `Conteo de ${m[1]}`],
+  // Activity metric prefixes that wrap a reward/rule name (translate the inner name too)
+  [/^Redeemed: (.+)$/, m => `Canjeó: ${ES_DICT[m[1]] || m[1]}`],
+  [/^Undo: (.+)$/, m => `Deshacer: ${ES_DICT[m[1]] || m[1]}`]
 ];
 
 // Fallback word swaps for leftover dynamic strings (compounds first).
@@ -2171,6 +2205,16 @@ function esWalk(root) {
 let esObserver = null;
 function esStart() {
   try { esWalk(document.body); } catch (e) {}
+  // Native browser alert()/confirm() dialogs aren't DOM text, so the observer
+  // can't reach them — wrap them to translate their message first (falls back to
+  // the original text when there's no translation). Only active while Spanish is on.
+  if (!window.__esDialogWrapped) {
+    window.__esDialogWrapped = true;
+    const _alert = window.alert.bind(window), _confirm = window.confirm.bind(window);
+    const tr = s => { const v = String(s == null ? "" : s); const t = esMaybe(v); return t == null ? v : t; };
+    window.alert = s => _alert(tr(s));
+    window.confirm = s => _confirm(tr(s));
+  }
   if (esObserver) return;
   esObserver = new MutationObserver(muts => {
     for (const m of muts) {
