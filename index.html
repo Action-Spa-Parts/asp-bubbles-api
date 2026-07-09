@@ -915,12 +915,6 @@
   .ps-over100-chip { font-size:13px; font-weight:600; padding:5px 11px; border-radius:99px; border:1px solid var(--good); color:var(--good); background:var(--surface); }
   .ps-over100-chip .n { color:var(--muted); font-weight:600; margin-left:4px; }
   .ps-over100-none { margin-top:6px; font-size:13px; color:var(--muted); }
-  /* Google website translator — hide its banner/tooltip and keep our layout put. */
-  #google_translate_element { display:none; }
-  .goog-te-banner-frame, .goog-te-gadget-icon, .skiptranslate iframe, iframe.goog-te-banner-frame { display:none !important; }
-  body { top:0 !important; }
-  .goog-tooltip, #goog-gt-tt, .goog-te-balloon-frame { display:none !important; }
-  font font { background:transparent !important; box-shadow:none !important; }
   .cl-item.locked { opacity:0.45; }
   .cl-item .cl-lock { margin-left:auto; font-size:14px; }
   .cl-acat { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
@@ -1397,7 +1391,6 @@
 
 </div>
 
-<div id="google_translate_element" aria-hidden="true"></div>
 <nav class="bottomnav">
   <button class="navbtn active" data-view="balances">
     <span class="navicon">★</span><span>Balances</span>
@@ -1844,45 +1837,165 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-/* ---------- Spanish translation (Google website translator, per-device toggle) ----------
-   A manager flips this on in Settings. We store the choice in localStorage so it
-   stays on for whoever uses that device. When on, we set the googtrans cookie and
-   load Google's translator, which translates the whole rendered page — including
-   the checklist tasks / rewards / earn rules that come from the database — and
-   keeps translating content as it's added (it watches the DOM). When off, the
-   script is never loaded, so English users are completely unaffected. */
+/* ---------- Spanish (conversational Latin-American) — hand-translated, per device ----------
+   A manager flips this on in Settings; the choice lives in localStorage so it stays
+   on for whoever uses that device. When on, we translate the visible text with our
+   own dictionary (natural, informal "tú" Spanish) and keep translating as the app
+   renders new screens (a MutationObserver). Off = nothing runs; English is untouched. */
 function aspLangEs() { return localStorage.getItem("aspLang") === "es"; }
-function aspSetTransCookie(on) {
-  if (on) {
-    document.cookie = "googtrans=/en/es;path=/";
-  } else {
-    document.cookie = "googtrans=;path=/;expires=Thu, 01 Jan 1970 00:00:00 GMT";
+function aspSetSpanish(on) { localStorage.setItem("aspLang", on ? "es" : "en"); location.reload(); }
+
+// Exact-phrase dictionary (trimmed English → Spanish).
+const ES_DICT = {
+  // Login + shell
+  "Warehouse rewards":"Recompensas del almacén","Enter your PIN to sign in.":"Ingresa tu PIN para entrar.",
+  "Sign in":"Entrar","Admin sign in":"Entrar como administrador","Create an admin account":"Crear una cuenta de administrador",
+  "Create account":"Crear cuenta","Use a PIN":"Usar un PIN","Email":"Correo","Password":"Contraseña",
+  "Log out":"Salir","Home":"Inicio","Manage":"Administrar","Refresh":"Actualizar","Manager":"Gerente",
+  "Pick an app to open":"Elige una app para abrir","Choose an app to open":"Elige una app para abrir",
+  // Home tiles / nav
+  "Bubbles":"Burbujas","Rewards & leaderboard":"Premios y tabla de posiciones","Closing Checklist":"Lista de cierre",
+  "End-of-day closing tasks":"Tareas de cierre del día","Box Counter":"Conteo de cajas","Friday packaging box counts":"Conteo de cajas los viernes",
+  "Employee of the Month":"Empleado del mes","Label Printer":"Impresora de etiquetas","Scan a part & reprint barcode labels":"Escanea una parte y reimprime etiquetas",
+  "Imported Resources":"Recursos","Links & resources":"Enlaces y recursos","Warehouse TV":"TV del almacén","No-login wall display":"Pantalla de pared sin sesión",
+  "Balances":"Saldos","Activity":"Actividad","How to earn":"Cómo ganar","How to earn bubbles":"Cómo ganar burbujas","Picks & Ships":"Surtido y envíos",
+  "Rewards":"Premios","your turn":"tu turno","Your turn":"Tu turno","YOUR TURN":"TU TURNO",
+  // Leaderboard / awards
+  "Recognize warehouse wins":"Reconoce los logros del almacén","Award →":"Premiar →","Award whole team":"Premiar a todo el equipo",
+  "Award history":"Historial de premios","Current balance":"Saldo actual","Starting balance":"Saldo inicial","Total bubbles":"Burbujas totales",
+  "New total":"Nuevo total","Give":"Dar","Give bubbles for any reason":"Da burbujas por cualquier motivo","Add to list":"Agregar a la lista",
+  "Load sample data":"Cargar datos de ejemplo","Team":"Equipo","Recent activity":"Actividad reciente","No activity yet":"Aún no hay actividad",
+  "No activity yet.":"Aún no hay actividad.","No team activity yet":"Aún no hay actividad del equipo","Your transactions":"Tus movimientos",
+  "Everyone else":"Los demás","Awarded today":"Otorgado hoy","Deducted today":"Descontado hoy","For…":"Para…",
+  // Rewards / redemptions
+  "Rewards you can redeem":"Premios que puedes canjear","Redeem":"Canjear","Redeem reward":"Canjear premio","Request it":"Solicitarlo",
+  "Your requests":"Tus solicitudes","Pending requests":"Solicitudes pendientes","Pending approval":"Pendiente de aprobación",
+  "Ready to hand out":"Listo para entregar","Mark given":"Marcar entregado","Cost in bubbles":"Costo en burbujas","No rewards":"Sin premios",
+  "Approve":"Aprobar","Deny":"Rechazar","Cancel":"Cancelar","Save":"Guardar","Edit":"Editar","Delete":"Eliminar","Remove":"Quitar",
+  "Add rewards in ⚙ Manage → Rewards.":"Agrega premios en ⚙ Administrar → Premios.",
+  // Checklist
+  "It's your turn to close up tonight. 🔒":"Te toca cerrar esta noche. 🔒","Start":"Empezar","Past checklists":"Listas anteriores",
+  "Open in checklist":"Abrir en la lista","Checklist flags to review":"Marcas de la lista por revisar","Flag":"Marcar","Flag task":"Marcar tarea",
+  "What was wrong? (optional note)":"¿Qué estuvo mal? (nota opcional)","No tasks were on this run.":"No hubo tareas en este día.",
+  "Doing it:":"Lo hace:","Closing order — this cycle":"Orden de cierre — este ciclo",
+  // Picks & Ships
+  "Picks & Ships — today":"Surtido y envíos — hoy","Picking — by employee (today)":"Surtido — por empleado (hoy)",
+  "Shipping (team)":"Envíos (equipo)","Today so far vs. recent (by this time)":"Hoy hasta ahora vs. días recientes (a esta hora)",
+  "🏆 Daily top picker":"🏆 Mejor surtidor del día","📅 Weekly leader":"📅 Líder de la semana","picks":"piezas","orders":"pedidos",
+  "orders/hr":"pedidos/hr","Shipped today":"Enviados hoy","of daily target":"de la meta diaria","Remaining":"Restantes",
+  "Proj. end of day":"Proy. fin del día","Per hour":"Por hora","Revenue":"Ingresos","even with avg":"igual al prom.",
+  "No picks recorded yet today.":"Aún no hay surtido registrado hoy.","No picking recorded yet today.":"Aún no hay surtido registrado hoy.",
+  "Building this week — check back as the days add up.":"Se va armando esta semana — vuelve a checar conforme pasen los días.",
+  // Settings
+  "Settings":"Configuración","Manager PIN":"PIN del gerente","Alert email":"Correo de alertas","App tiles (home screen)":"Apps (pantalla de inicio)",
+  "Export data (CSV)":"Exportar datos (CSV)","Save settings":"Guardar configuración","Box count day":"Día de conteo de cajas",
+  "Closing checklist deadline":"Hora límite de la lista de cierre","Closing checklist — closed days":"Lista de cierre — días cerrados",
+  "Español — translate to Spanish":"Español — traducir al español","Bubble balances":"Saldos de burbujas","Checklist history":"Historial de listas",
+  "Box counts":"Conteos de cajas","Penalty":"Penalización","Section":"Sección",
+  // Common empty states / misc
+  "Loading…":"Cargando…","No matches":"Sin coincidencias","Try a different search.":"Prueba con otra búsqueda.","Nothing to show here.":"Nada que mostrar aquí.",
+  "Couldn't load.":"No se pudo cargar.","Offline":"Sin conexión","No results yet":"Aún no hay resultados","Date":"Fecha","Name":"Nombre",
+  "All names":"Todos los nombres","All dates":"Todas las fechas","All people":"Todas las personas","All categories":"Todas las categorías","Clear":"Limpiar",
+  "Category":"Categoría","People":"Personas","Earn rules":"Reglas para ganar","Admins":"Administradores","Vote":"Votar","Vote for a coworker":"Vota por un compañero",
+  "Past winners":"Ganadores anteriores","Notifications":"Notificaciones","Update now":"Actualizar ahora","Quantity":"Cantidad","Count":"Conteo",
+  "Reorders":"Reórdenes","Sizes":"Tamaños","Send test":"Enviar prueba","Turn on":"Activar","Enable notifications":"Activar notificaciones",
+  // Actions / buttons (cores; a leading emoji/arrow is kept automatically)
+  "Use a PIN":"Usar un PIN","Start closing checklist":"Empezar la lista de cierre","Submit checklist":"Enviar la lista",
+  "Delete this run":"Eliminar este día","Restart order from the top (A→Z)":"Reiniciar el orden desde arriba (A→Z)",
+  "Reshuffle order now":"Reordenar ahora","Add a person":"Agregar persona","Add a reward":"Agregar premio","Add an earn rule":"Agregar regla",
+  "Add a task":"Agregar tarea","Add a printer":"Agregar impresora","Add a vote:":"Agregar voto:","Add link":"Agregar enlace","Add printer":"Agregar impresora",
+  "New person":"Nueva persona","New reward":"Nuevo premio","New earn rule":"Nueva regla","New task":"Nueva tarea","New admin":"Nuevo administrador",
+  "Save count":"Guardar conteo","Save link":"Guardar enlace","Save limit":"Guardar límite","Save winner":"Guardar ganador","Save settings":"Guardar configuración",
+  "Copy":"Copiar","Find":"Buscar","Print":"Imprimir","Reprint last":"Reimprimir la última","Test print":"Prueba de impresión","Show photo":"Ver foto",
+  "Mark given":"Marcar entregado","Give":"Dar","Request it":"Solicitarlo","Vote":"Votar","Standings":"Posiciones","Current standings":"Posiciones actuales",
+  "Flag & deduct":"Marcar y descontar","Check":"Revisar","Refresh now":"Actualizar ahora","Send to all devices":"Enviar a todos los dispositivos",
+  "Send a message to all devices":"Enviar un mensaje a todos los dispositivos","Reminders on this device":"Recordatorios en este dispositivo",
+  "Enable on this device":"Activar en este dispositivo","Off — turned off for now.":"Desactivado por ahora.","No winner yet":"Aún sin ganador",
+  "Morning meeting credits to approve":"Créditos de junta matutina por aprobar","Ready to hand out":"Listo para entregar",
+  // Empty states extracted
+  "No people yet. Tap “Add a person”.":"Aún no hay personas. Toca “Agregar persona”.","No rewards yet. Tap “Add a reward”.":"Aún no hay premios. Toca “Agregar premio”.",
+  "No rules yet. Tap “Add an earn rule”.":"Aún no hay reglas. Toca “Agregar regla”.","No tasks yet. Tap \"Add a task\".":"Aún no hay tareas. Toca “Agregar tarea”.",
+  "No transactions yet":"Aún no hay movimientos","No votes yet.":"Aún no hay votos.","No links yet":"Aún no hay enlaces","No winner yet":"Aún sin ganador",
+  "No printers yet — add one below.":"Aún no hay impresoras — agrega una abajo.","No admin accounts yet.":"Aún no hay cuentas de administrador.",
+  "Team total: ":"Total del equipo: ","Vote for a coworker":"Vota por un compañero","Who's voting…":"Quién está votando…","Current balance":"Saldo actual"
+};
+
+// Patterns for common dynamic strings (numbers/names filled in).
+const ES_RX = [
+  [/^✓ hit (\d+) picks · \+(\d+) bubbles$/, m => `✓ llegó a ${m[1]} piezas · +${m[2]} burbujas`],
+  [/^(\d+) \/ (\d+) picks$/, m => `${m[1]} / ${m[2]} piezas`],
+  [/^🎯 Picked over (\d+) lines today · $/, m => `🎯 Recogió más de ${m[1]} líneas hoy · `],
+  [/^\+(\d+) bubbles each$/, m => `+${m[1]} burbujas c/u`],
+  [/^No one has passed (\d+) lines yet today\.$/, m => `Nadie ha pasado ${m[1]} líneas todavía hoy.`],
+  [/^Earns .Top picker. · \+(\d+) bubbles$/, m => `Gana “Mejor surtidor” · +${m[1]} burbujas`],
+  [/^Team total: $/, () => `Total del equipo: `]
+];
+
+// Fallback word swaps for leftover dynamic strings (compounds first).
+const ES_WORDS = [
+  [/\bpicks\/picker\b/gi, "piezas/persona"], [/\borders\/hr\b/gi, "pedidos/hr"], [/\bpicks\/hr\b/gi, "piezas/hr"],
+  [/\bvs avg\b/gi, "vs prom"], [/\bthis week\b/gi, "esta semana"], [/\bpicks\b/gi, "piezas"], [/\borders\b/gi, "pedidos"],
+  [/\bbubbles\b/gi, "burbujas"], [/\blines\b/gi, "líneas"], [/\btoday\b/gi, "hoy"], [/\bavg\b/gi, "prom"], [/\beach\b/gi, "c/u"],
+  [/\blines\b/gi, "líneas"]
+];
+
+function esPhrase(key) {
+  if (Object.prototype.hasOwnProperty.call(ES_DICT, key)) return ES_DICT[key];
+  for (const [rx, rep] of ES_RX) { const m = key.match(rx); if (m) return (typeof rep === "function") ? rep(m) : key.replace(rx, rep); }
+  return null;
+}
+function esMaybe(v) {
+  if (v == null) return null;
+  const lead = (v.match(/^\s*/) || [""])[0], trail = (v.match(/\s*$/) || [""])[0];
+  const key = v.slice(lead.length, v.length - trail.length);
+  if (!key || !/[A-Za-z]/.test(key)) return null;
+  // 1) full-phrase match (also catches dict keys that start with an emoji)
+  let out = esPhrase(key);
+  // 2) strip leading/trailing decoration (arrows, emojis, punctuation) and match the core
+  if (out == null) {
+    const pfx = (key.match(/^[^A-Za-z0-9]+/) || [""])[0];
+    const sfx = (key.match(/[^A-Za-z0-9]+$/) || [""])[0];
+    const core = key.slice(pfx.length, key.length - sfx.length);
+    if (core && core !== key) { const c = esPhrase(core); if (c != null) out = pfx + c + sfx; }
   }
+  // 3) fallback: swap common warehouse words inside leftover dynamic strings
+  if (out == null) {
+    let w = key, changed = false;
+    for (const [rx, rep] of ES_WORDS) { if (rx.test(w)) { w = w.replace(rx, rep); changed = true; } }
+    if (changed) out = w;
+  }
+  if (out == null || out === key) return null;
+  return lead + out + trail;
 }
-// Global callback the Google script invokes once it loads.
-function googleTranslateElementInit() {
-  try {
-    new google.translate.TranslateElement(
-      { pageLanguage: "en", includedLanguages: "es", autoDisplay: false },
-      "google_translate_element");
-  } catch (e) {}
+function esNode(n) { const t = esMaybe(n.nodeValue); if (t != null && t !== n.nodeValue) n.nodeValue = t; }
+function esAttrs(el) {
+  ["placeholder", "title", "aria-label"].forEach(a => {
+    if (el.hasAttribute && el.hasAttribute(a)) { const t = esMaybe(el.getAttribute(a)); if (t != null) el.setAttribute(a, t); }
+  });
 }
-function aspLoadGoogleTranslate() {
-  if (document.getElementById("goog-te-script")) return;
-  const s = document.createElement("script");
-  s.id = "goog-te-script";
-  s.src = "https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit";
-  document.head.appendChild(s);
+function esWalk(root) {
+  if (!root) return;
+  if (root.nodeType === 3) { esNode(root); return; }
+  if (root.nodeType !== 1) return;
+  esAttrs(root);
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = []; while (w.nextNode()) nodes.push(w.currentNode);
+  nodes.forEach(esNode);
+  if (root.querySelectorAll) root.querySelectorAll("[placeholder],[title],[aria-label]").forEach(esAttrs);
 }
-// Called by the Settings toggle. Persists the choice and reloads so the page
-// loads in the chosen language cleanly.
-function aspSetSpanish(on) {
-  localStorage.setItem("aspLang", on ? "es" : "en");
-  aspSetTransCookie(on);
-  location.reload();
+let esObserver = null;
+function esStart() {
+  try { esWalk(document.body); } catch (e) {}
+  if (esObserver) return;
+  esObserver = new MutationObserver(muts => {
+    for (const m of muts) {
+      if (m.type === "childList") m.addedNodes.forEach(n => { try { esWalk(n); } catch (e) {} });
+      else if (m.type === "characterData") esNode(m.target);
+    }
+  });
+  esObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
 }
-// On boot: if Spanish is the saved preference, translate right away.
-if (aspLangEs()) { aspSetTransCookie(true); aspLoadGoogleTranslate(); }
+if (aspLangEs()) { if (document.body) esStart(); else window.addEventListener("DOMContentLoaded", esStart); }
 
 /* ---------- Offline-fallback sample data (only used if the server call fails) ---------- */
 
@@ -5508,7 +5621,7 @@ function renderSettingsAdmin() {
 
     <div class="sset">
       <div class="ftitle2">Español — translate to Spanish</div>
-      <div class="muted" style="font-size:12.5px; margin:2px 0 8px;">Translates the whole app to Spanish (including checklist tasks, rewards, and earn rules). Applies to <strong>this device only</strong> and stays on until turned off. The page reloads when you switch.</div>
+      <div class="muted" style="font-size:12.5px; margin:2px 0 8px;">Shows the app's screens, buttons, and labels in conversational Spanish. Applies to <strong>this device only</strong> and stays on until turned off. The page reloads when you switch. (Custom text you typed in — like reward names or checklist tasks — stays as written.)</div>
       <label class="sset-day"><input type="checkbox" id="setSpanish" ${aspLangEs() ? "checked" : ""}> Spanish / Español</label>
     </div>
 
