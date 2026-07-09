@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '133';
+const APP_VERSION = '134';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -1215,6 +1215,100 @@ async function deleteAward(who, id) {
   rev.forEach(r => ids.push(r.id));                                       // this row IS an undo → also drop the original
   const del = await pool.query('DELETE FROM awards WHERE id = ANY($1)', [ids]);
   return { ok: true, deleted: del.rowCount };
+}
+
+// Manager housekeeping: purge OLD history logs so the activity feeds don't grow
+// forever. "days" = how much recent history to KEEP; anything strictly older is
+// removed. days = 0 clears everything up to now (today's live records are still
+// preserved where noted). "scopes" picks which logs to clear.
+//
+// BALANCE SAFETY (the important part): each employee's bubble balance is derived
+// from their ledger — SUM(awards.amount) minus SUM(approved redemptions.cost).
+// So we can NEVER just delete old award rows: that would silently lower balances.
+// For the 'ledger' scope we instead CARRY THE BALANCE FORWARD — we total each
+// person's old awards and old approved redemptions, delete those rows, then write
+// ONE "Opening balance (carried forward)" award equal to (awards − redemptions).
+// That keeps SUM(awards) − SUM(approved redemptions) per person exactly the same,
+// so the balance is provably unchanged no matter how the balances view computes
+// it. Pending reward requests are never touched.
+async function clearOldData(who, body) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  body = body || {};
+  const days = cleanInt(body.days);
+  if (days === null || days < 0) return { error: 'Choose how far back to keep.' };
+  const scopes = Array.isArray(body.scopes) ? body.scopes.map(String) : [];
+  if (!scopes.length) return { error: 'Pick at least one thing to clear.' };
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString();  // keep newer than this
+
+  const client = await pool.connect();
+  const cleared = {};
+  try {
+    await client.query('BEGIN');
+
+    // ----- Bubbles + reward-request history (balance-preserving carry-forward) -----
+    if (scopes.includes('ledger')) {
+      const { rows: aw } = await client.query(
+        `SELECT employee_id, COALESCE(SUM(amount),0)::int AS s
+           FROM awards WHERE created_at < $1 GROUP BY employee_id`, [cutoff]);
+      const { rows: rd } = await client.query(
+        `SELECT employee_id, COALESCE(SUM(cost),0)::int AS s
+           FROM redemptions WHERE status = 'approved' AND created_at < $1
+          GROUP BY employee_id`, [cutoff]);
+      const net = new Map();
+      for (const r of aw) net.set(r.employee_id, (net.get(r.employee_id) || 0) + r.s);
+      for (const r of rd) net.set(r.employee_id, (net.get(r.employee_id) || 0) - r.s);
+
+      const delA = await client.query('DELETE FROM awards WHERE created_at < $1', [cutoff]);
+      // Only the balance-affecting (approved) and dead (denied) requests go; pending stay.
+      const delR = await client.query(
+        `DELETE FROM redemptions WHERE status IN ('approved','denied') AND created_at < $1`, [cutoff]);
+      // Any surviving row that pointed at a now-deleted award (undo pairing) is tidied.
+      await client.query(
+        `UPDATE awards SET reversed_by_id = NULL
+          WHERE reversed_by_id IS NOT NULL AND reversed_by_id NOT IN (SELECT id FROM awards)`);
+
+      let carried = 0;
+      for (const [eid, amt] of net) {
+        if (eid == null || amt === 0) continue;   // nothing to carry for a net-zero person
+        await client.query(
+          `INSERT INTO awards (employee_id, metric, amount, awarded_by, note, created_at)
+           VALUES ($1, 'Opening balance (carried forward)', $2, 'System', $3, $4)`,
+          [eid, amt, 'Consolidated bubble history before cleanup', cutoff]);
+        carried++;
+      }
+      cleared.ledger = { awardsRemoved: delA.rowCount, requestsRemoved: delR.rowCount, carriedForward: carried };
+    }
+
+    // ----- Closing-checklist history (items cascade with their run) -----
+    if (scopes.includes('checklist')) {
+      const d = await client.query('DELETE FROM checklist_runs WHERE run_date < $1::date', [cutoff]);
+      cleared.checklist = { runsRemoved: d.rowCount };
+    }
+
+    // ----- Box counter activity log (current inventory in box_sizes is untouched) -----
+    if (scopes.includes('box')) {
+      const d = await client.query('DELETE FROM box_activity WHERE ts < $1', [cutoff]);
+      cleared.box = { removed: d.rowCount };
+    }
+
+    // ----- Other logs: resolved meeting claims, EOM votes, daily pick snapshots -----
+    // (Pending meeting claims and the permanent EOM winners are kept.)
+    if (scopes.includes('other')) {
+      const m = await client.query(
+        `DELETE FROM meeting_credits WHERE status <> 'pending' AND requested_at < $1`, [cutoff]);
+      const v = await client.query('DELETE FROM eom_votes WHERE created_at < $1', [cutoff]);
+      const p = await client.query('DELETE FROM pick_daily WHERE pick_date < $1::date', [cutoff]);
+      cleared.other = { meetingCredits: m.rowCount, eomVotes: v.rowCount, pickDays: p.rowCount };
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+  return { ok: true, days, cutoff, cleared };
 }
 
 async function requestRedemption(who, rewardName) {
@@ -3860,6 +3954,7 @@ app.post('/', async (req, res) => {
         case 'getPushStatus':          out = await getPushStatus(who); break;
         case 'setNotifyEnabled':       out = await setNotifyEnabled(who, body.enabled); break;
         case 'updateSettings':         out = await updateSettings(who, body); break;
+        case 'clearOldData':           out = await clearOldData(who, body); break;
         case 'updateHowto':            out = await updateHowto(who, body.guide); break;
         case 'sendTestPush':           out = await sendTestPush(who); break;
         case 'broadcastPush':          out = await broadcastPush(who, body); break;

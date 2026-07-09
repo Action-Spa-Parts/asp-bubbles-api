@@ -6187,6 +6187,26 @@ function renderSettingsAdmin() {
       </div>
     </div>
 
+    <div class="sset" style="border:1px solid #f1c7c7; background:#fff7f7;">
+      <div class="ftitle2">Clear old logs</div>
+      <div class="muted" style="font-size:12.5px; margin:2px 0 10px;">Permanently remove old history so the activity feeds don't grow forever. <strong>Bubble balances are always kept</strong> — old bubble activity is rolled into one “carried forward” line per person, so nobody loses points. Today's checklist, the current box counts, and pending requests are never touched. Tip: export first (above) if you want a copy.</div>
+      <div style="font-size:12.5px; font-weight:600; margin-bottom:4px;">Keep the most recent…</div>
+      <div class="sset-days" style="margin-bottom:12px;">
+        <label class="sset-day"><input type="radio" name="clrDays" value="90" checked> 90 days</label>
+        <label class="sset-day"><input type="radio" name="clrDays" value="60"> 60 days</label>
+        <label class="sset-day"><input type="radio" name="clrDays" value="30"> 30 days</label>
+        <label class="sset-day"><input type="radio" name="clrDays" value="0"> Everything (wipe all history)</label>
+      </div>
+      <div style="font-size:12.5px; font-weight:600; margin-bottom:4px;">What to clear</div>
+      <div class="sset-days" style="margin-bottom:14px;">
+        <label class="sset-day"><input type="checkbox" data-clr="ledger" checked> Bubbles &amp; reward-request history</label>
+        <label class="sset-day"><input type="checkbox" data-clr="checklist" checked> Closing-checklist history</label>
+        <label class="sset-day"><input type="checkbox" data-clr="box" checked> Box counter history</label>
+        <label class="sset-day"><input type="checkbox" data-clr="other" checked> Other logs (meeting claims, EOM votes, pick stats)</label>
+      </div>
+      <button class="ghost" id="clrBtn" style="border-color:#d88; color:#c33;">Clear old logs…</button>
+    </div>
+
     <div style="margin-top:18px;"><button class="primary" id="setSaveBtn">Save settings</button></div>
   `;
   $("setSaveBtn").addEventListener("click", saveSettings);
@@ -6195,6 +6215,48 @@ function renderSettingsAdmin() {
   $("expAwards").addEventListener("click", exportAwards);
   $("expChecklist").addEventListener("click", exportChecklistCsv);
   $("expBox").addEventListener("click", exportBoxCounts);
+  $("clrBtn").addEventListener("click", clearOldLogs);
+}
+
+// Manager "Clear old logs" — confirms, then calls the balance-preserving backend
+// purge and reports what was removed. Balances never change (see clearOldData).
+async function clearOldLogs() {
+  const daysEl = document.querySelector('input[name="clrDays"]:checked');
+  const days = daysEl ? parseInt(daysEl.value, 10) : 90;
+  const scopes = [...document.querySelectorAll('[data-clr]:checked')].map(c => c.dataset.clr);
+  if (!scopes.length) { alert("Pick at least one thing to clear."); return; }
+  const names = {
+    ledger: "Bubbles & reward-request history (balances kept)",
+    checklist: "Closing-checklist history",
+    box: "Box counter history",
+    other: "Meeting claims, EOM votes & pick stats",
+  };
+  const list = scopes.map(s => "•  " + names[s]).join("\n");
+  const range = days === 0 ? "ALL history (everything)" : `everything older than ${days} days`;
+  $("confirmText").style.whiteSpace = "pre-line";
+  askConfirm(
+    `Clear ${range}?\n\nThis permanently removes:\n${list}\n\nBubble balances are KEPT — old bubble activity is carried forward into one line per person. This can't be undone.`,
+    async () => {
+      const btn = $("clrBtn"); if (btn) { btn.disabled = true; btn.textContent = "Clearing…"; }
+      try {
+        const res = await apiCall("clearOldData", { pin: session.pin, days, scopes });
+        if (res.error) { alert(res.error); if (btn) { btn.disabled = false; btn.textContent = "Clear old logs…"; } return; }
+        const c = res.cleared || {};
+        const parts = [];
+        if (c.ledger) parts.push(`${c.ledger.awardsRemoved} bubble entries + ${c.ledger.requestsRemoved} reward requests cleared (${c.ledger.carriedForward} balances carried forward)`);
+        if (c.checklist) parts.push(`${c.checklist.runsRemoved} closing days cleared`);
+        if (c.box) parts.push(`${c.box.removed} box log entries cleared`);
+        if (c.other) parts.push(`${c.other.meetingCredits} meeting claims, ${c.other.eomVotes} votes, ${c.other.pickDays} pick days cleared`);
+        await loadAdmin(); await fetchData();
+        if (state.admin.tab === "settings") renderSettingsAdmin();
+        alert("Done.\n\n" + (parts.length ? parts.join("\n") : "Nothing was old enough to clear."));
+      } catch (err) {
+        alert("Error: " + (err && err.message ? err.message : err));
+        const b = $("clrBtn"); if (b) { b.disabled = false; b.textContent = "Clear old logs…"; }
+      }
+    },
+    { okText: "Yes, clear" }
+  );
 }
 
 // ----- CSV export (client-side; uses the manager's existing read endpoints) -----
