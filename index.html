@@ -6006,12 +6006,16 @@ function renderRuleAdmin() {
           <div class="aactions">
             <button class="ghost" data-edit="${r.id}">Edit</button>
             <button class="ghost" data-toggle="${r.id}" data-active="${r.active ? 0 : 1}">${r.active ? "Turn off" : "Turn on"}</button>
+            <button class="ghost danger" data-delrule="${r.id}" data-name="${escapeAttr(r.metric)}">Delete</button>
           </div>
         </div>
       </div>`;
   }).join("");
   el.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => editRule(parseInt(b.dataset.edit, 10))));
   el.querySelectorAll("[data-toggle]").forEach(b => b.addEventListener("click", () => adminSave("setRuleActive", { id: parseInt(b.dataset.toggle, 10), active: b.dataset.active === "1" })));
+  el.querySelectorAll("[data-delrule]").forEach(b => b.addEventListener("click", () =>
+    askConfirm(`Delete the earn rule "${b.dataset.name}"? This can't be undone. (Past awards already given are unaffected.)`,
+      () => adminSave("deleteRule", { id: parseInt(b.dataset.delrule, 10) }), { okText: "Delete" })));
 }
 
 // Reveal an admin form: show it, scroll it into view (the Manage modal scrolls),
