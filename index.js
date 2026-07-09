@@ -1669,6 +1669,14 @@ async function adminSignup(body) {
   // Everyone after must be approved by an existing admin (or the Manager PIN).
   const { rows: c } = await pool.query('SELECT COUNT(*)::int AS n FROM admins');
   const isFirst = c[0].n === 0;
+  // Hard cap on outstanding requests so IP-rotation can't flood the DB with pending
+  // rows. A manager clears the backlog by approving/denying in Manage → Admins.
+  if (!isFirst) {
+    const { rows: p } = await pool.query('SELECT COUNT(*)::int AS n FROM admins WHERE pending = true');
+    if (p[0].n >= SIGNUP_MAX_PENDING) {
+      return { error: 'Too many pending manager requests right now. Ask an existing manager to review them first.' };
+    }
+  }
   const res = await createAdminRow(body.name, body.email, body.password, !isFirst);
   if (res.error) return res;
   if (isFirst) {
@@ -3690,6 +3698,33 @@ function loginRateRecord(key, success) {
   }
 }
 
+// ---------- Signup abuse throttle ----------
+// adminSignup is unauthenticated (anyone can request an account; it lands PENDING
+// until a manager approves it). Unlike login we count EVERY attempt, not just
+// failures — a spammer who registers a fresh unique email each time "succeeds",
+// so a failure-based limiter would never trip. Two guards: a per-IP attempt cap
+// (checked BEFORE the scrypt hash, so spam can't burn CPU), and a hard cap on the
+// number of outstanding pending rows so IP-rotation can't flood the DB either.
+const SIGNUP_WINDOW_MS = 10 * 60 * 1000;   // rolling window
+const SIGNUP_MAX = 5;                        // signup attempts per IP per window
+const SIGNUP_MAX_PENDING = 25;               // total un-approved rows allowed to sit in the DB
+const signupHits = new Map();                // ip -> number[] (attempt timestamps)
+
+// True if this IP has exceeded the signup attempt cap in the window. Records the
+// attempt as a side effect (so it must be called once per request).
+function signupThrottled(key) {
+  const now = Date.now();
+  const arr = (signupHits.get(key) || []).filter(t => now - t < SIGNUP_WINDOW_MS);
+  arr.push(now);
+  signupHits.set(key, arr);
+  if (signupHits.size > 500) {               // opportunistic cleanup of stale IPs
+    for (const [k, v] of signupHits) {
+      if (!v.length || now - v[v.length - 1] > SIGNUP_WINDOW_MS) signupHits.delete(k);
+    }
+  }
+  return arr.length > SIGNUP_MAX;
+}
+
 app.post('/', async (req, res) => {
   let body;
   try {
@@ -3707,6 +3742,10 @@ app.post('/', async (req, res) => {
     if (blk.blocked) {
       return res.json({ error: `Too many attempts. Please wait ${blk.retryAfter}s and try again.` });
     }
+  }
+  // Signup abuse throttle — reject before we hash a password (scrypt is costly).
+  if (action === 'adminSignup' && signupThrottled(rlKey(req))) {
+    return res.json({ error: 'Too many signup attempts. Please wait a few minutes and try again.' });
   }
   try {
     let out;
