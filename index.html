@@ -907,6 +907,14 @@
   .ps-vsavg.pos { color:var(--good); font-weight:600; }
   .ps-vsavg.neg { color:var(--danger); font-weight:600; }
   @media (max-width:420px){ .ps-winners{ grid-template-columns:1fr; } }
+  /* "Pick over 100 lines" reward callout */
+  .ps-over100 { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); box-shadow:var(--shadow-card); padding:12px 14px; margin:10px 0 4px; }
+  .ps-over100-h { font-size:13px; font-weight:700; color:var(--text); }
+  .ps-over100-h .amt { color:var(--good); }
+  .ps-over100-names { margin-top:8px; display:flex; flex-wrap:wrap; gap:8px; }
+  .ps-over100-chip { font-size:13px; font-weight:600; padding:5px 11px; border-radius:99px; border:1px solid var(--good); color:var(--good); background:var(--surface); }
+  .ps-over100-chip .n { color:var(--muted); font-weight:600; margin-left:4px; }
+  .ps-over100-none { margin-top:6px; font-size:13px; color:var(--muted); }
   .cl-item.locked { opacity:0.45; }
   .cl-item .cl-lock { margin-left:auto; font-size:14px; }
   .cl-acat { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
@@ -2651,6 +2659,18 @@ function renderPickShip() {
     html += `<div class="ps-win-sub" style="margin-top:6px;">Building this week — check back as the days add up.</div>`;
   }
   html += `</div></div>`;
+
+  // --- "Pick over 100 lines" reward: who qualifies today ---
+  const over = pickers.filter(pk => pk.lines >= goal);
+  html += `<div class="ps-over100">`;
+  html += `<div class="ps-over100-h">🎯 Picked over ${goal} lines today${rw.over100 != null ? ` · <span class="amt">+${num(rw.over100)} bubbles each</span>` : ""}</div>`;
+  if (over.length) {
+    html += `<div class="ps-over100-names">` + over.map(pk =>
+      `<span class="ps-over100-chip">✅ ${escapeHtml(pk.picker)}<span class="n">${num(pk.lines)} lines</span></span>`).join("") + `</div>`;
+  } else {
+    html += `<div class="ps-over100-none">No one has passed ${goal} lines yet today.</div>`;
+  }
+  html += `</div>`;
 
   // --- Picking: per-employee leaderboard with progress toward the 100-line reward ---
   html += `<div class="ps-sec"><h3>Picking — by employee (today)</h3>`;
