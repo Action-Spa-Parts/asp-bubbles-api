@@ -2060,7 +2060,34 @@ const ES_DICT = {
   "Replace any low or empty toner / ink and set out spares if needed.":"Reemplaza tóner / tinta bajo o vacío y deja repuestos si hace falta.",
   "Restock packing tape, labels, and shipping supplies at each station.":"Reabastece cinta de empaque, etiquetas y material de envío en cada estación.",
   "Scanners and handheld devices placed on chargers.":"Escáneres y dispositivos de mano puestos a cargar.","Trash and cardboard removed; recycling emptied.":"Basura y cartón retirados; reciclaje vaciado.",
-  "Workstations wiped down and organized for the next shift.":"Estaciones limpiadas y organizadas para el siguiente turno."
+  "Workstations wiped down and organized for the next shift.":"Estaciones limpiadas y organizadas para el siguiente turno.",
+  // ---- Gaps found in the 2nd full scan ----
+  "Confirm":"Confirmar","Checklist":"Lista","Month":"Mes","Emp. of Month":"Emp. del mes","Push notifications":"Notificaciones push",
+  "Already in the list":"Ya está en la lista","What is this link for?":"¿Para qué es este enlace?","(optional)":"(opcional)",
+  "(links group under this heading)":"(los enlaces se agrupan bajo este encabezado)","(emoji, or paste an image URL)":"(emoji, o pega una URL de imagen)",
+  "Building & Security":"Edificio y seguridad","Add an admin":"Agregar administrador","🔄 A new version of the app is ready.":"🔄 Hay una nueva versión de la app lista.",
+  // Curly-quote versions (the app renders “ ” not straight quotes)
+  "Whole-team rule (appears under “Award whole team”)":"Regla de todo el equipo (aparece en “Premiar a todo el equipo”)",
+  "Box sizes at or below their low alert (or out of stock) — these need reordering. Set a “Low ≤” number on the Sizes tab to control what shows here.":"Tamaños de caja en o por debajo de su alerta baja (o agotados) — hay que reordenarlos. Pon un número en “Bajo ≤” en la pestaña Tamaños para controlar lo que aparece aquí.",
+  "Current inventory and the optional low-stock alert per size. Set a number in “Low ≤” to flag that size when stock drops to it; leave blank for no alert.":"Inventario actual y la alerta opcional de bajo stock por tamaño. Pon un número en “Bajo ≤” para marcar ese tamaño cuando el stock baje a ese nivel; déjalo en blanco para sin alerta.",
+  "“Remove from checklist” takes someone out of the nightly closing rotation. “Remove from voting” takes them out of Employee of the Month. “Remove from app” removes them everywhere (leaderboard, login, checklist, voting) but keeps their history — you can Restore them anytime.":"“Quitar de la lista” saca a alguien de la rotación de cierre nocturno. “Quitar de la votación” lo saca del Empleado del mes. “Quitar de la app” lo quita de todos lados (tabla, inicio de sesión, lista, votación) pero conserva su historial — puedes Restaurarlo cuando quieras.",
+  // Team-wide rules line (rendered in 3 fragments around a bold word)
+  "These are your team-wide rules. Tap one to award it to":"Estas son tus reglas para todo el equipo. Toca una para dársela a","everyone":"todos","at once.":"a la vez.",
+  // Placeholders
+  "e.g. Coffee":"p. ej. Café","e.g. Maria":"p. ej. María","e.g. Julio":"p. ej. Julio","e.g. Top picker":"p. ej. Mejor surtidor","e.g. Front desk":"p. ej. Recepción",
+  "e.g. Compliance & Training":"p. ej. Cumplimiento y capacitación","e.g. ActionComply":"p. ej. ActionComply","e.g. 100":"p. ej. 100","e.g. 8080":"p. ej. 8080",
+  "e.g. XXZUJ231600583":"p. ej. XXZUJ231600583","e.g. All exterior lights are turned OFF":"p. ej. Todas las luces exteriores apagadas",
+  "e.g. Truck is here — all hands to the dock":"p. ej. Llegó el camión — todos al andén","e.g. back light was left on":"p. ej. se quedó una luz trasera encendida",
+  // Label printer — readable full sentences (Zebra enrollment steps referencing English software are left as-is)
+  "Scan a part barcode (or type the number), set the quantity, then tap Print. Labels print on the Zebra ZQ620.":"Escanea el código de barras de una parte (o escribe el número), pon la cantidad y toca Imprimir. Las etiquetas salen en la Zebra ZQ620.",
+  "How to add a new Zebra printer (step by step)":"Cómo agregar una nueva impresora Zebra (paso a paso)","Power on the new Zebra and connect it to the warehouse Wi-Fi.":"Enciende la nueva Zebra y conéctala al Wi-Fi del almacén.",
+  "Every printer uses the same Zebra Cloud account, so you only enter a name + serial here — no API key per printer. Add as many as you like.":"Cada impresora usa la misma cuenta de Zebra Cloud, así que aquí solo pones un nombre + serie — sin clave API por impresora. Agrega las que quieras.",
+  "(managers) — paste into the warehouse PC script:":"(gerentes) — pega en el script de la PC del almacén:","(managers) — print with no warehouse PC":"(gerentes) — imprime sin PC del almacén",
+  "Saturday 2:37 AM":"sábado 2:37 AM","100 calls/day":"100 llamadas/día","1 cloud call":"1 llamada a la nube",
+  // Gaps found in the JS-rendered pass
+  "(reversed)":"(revertido)","New PIN":"PIN nuevo","Off":"Apagado","Refreshing…":"Actualizando…","looking up…":"buscando…","Uploading":"Subiendo",
+  "No rules yet. Tap \"Add an earn rule\".":"Aún no hay reglas. Toca \"Agregar regla\".","No rewards yet. Tap \"Add a reward\".":"Aún no hay premios. Toca \"Agregar premio\".",
+  "No people yet. Tap \"Add a person\".":"Aún no hay personas. Toca \"Agregar persona\"."
 };
 
 // Patterns for common dynamic strings (numbers/names filled in).
@@ -2147,7 +2174,9 @@ const ES_RX = [
   [/^Count for (.+)$/, m => `Conteo de ${m[1]}`],
   // Activity metric prefixes that wrap a reward/rule name (translate the inner name too)
   [/^Redeemed: (.+)$/, m => `Canjeó: ${ES_DICT[m[1]] || m[1]}`],
-  [/^Undo: (.+)$/, m => `Deshacer: ${ES_DICT[m[1]] || m[1]}`]
+  [/^Undo: (.+)$/, m => `Deshacer: ${ES_DICT[m[1]] || m[1]}`],
+  [/^Uploading (.+)…$/, m => `Subiendo ${m[1]}…`],
+  [/^(.+) · looking up…$/, m => `${m[1]} · buscando…`]
 ];
 
 // Fallback word swaps for leftover dynamic strings (compounds first).
