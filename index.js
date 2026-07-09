@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '132';
+const APP_VERSION = '133';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -680,6 +680,28 @@ async function updateSettings(who, body) {
   return { ok: true };
 }
 
+// Manager saves the edited How-To Guide. Stored as JSON in app_settings; the
+// front-end falls back to its built-in default when this is null. We sanitize to
+// plain strings and cap sizes so it can't be bloated or abused. The front-end
+// renders it as escaped text (with *bold* markup), so no HTML is stored/executed.
+async function updateHowto(who, guide) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  if (!Array.isArray(guide)) return { error: 'Bad guide data' };
+  const str = (v, max) => String(v == null ? '' : v).slice(0, max);
+  const arr = (v, maxItems, maxLen) => (Array.isArray(v) ? v : []).slice(0, maxItems)
+    .map(x => str(x, maxLen)).filter(x => x.trim() !== '');
+  const clean = guide.slice(0, 40).map(a => ({
+    icon: str((a || {}).icon, 8),
+    name: str((a || {}).name, 60),
+    what: str((a || {}).what, 300),
+    everyone: arr((a || {}).everyone, 20, 400),
+    manager: arr((a || {}).manager, 20, 400),
+    managerOnly: !!(a || {}).managerOnly,
+  })).filter(a => a.name.trim() !== '');
+  await setSetting('howto_guide', JSON.stringify(clean));
+  return { ok: true, howto: clean };
+}
+
 // =================================================================
 // Helpers
 // =================================================================
@@ -969,6 +991,7 @@ async function getData(who) {
     lateFlagOn: lateFlagOn(),
     deadlineLabel: deadlineLabel(),
     tiles: tilesConfig(),
+    howto: settingJson('howto_guide', null),   // manager-editable How-To Guide (null = use built-in default)
     settings: isManager ? {
       alertEmail: settingStr('alert_email', ''),
       closedDows: closedDows(),
@@ -3792,6 +3815,7 @@ app.post('/', async (req, res) => {
         case 'getPushStatus':          out = await getPushStatus(who); break;
         case 'setNotifyEnabled':       out = await setNotifyEnabled(who, body.enabled); break;
         case 'updateSettings':         out = await updateSettings(who, body); break;
+        case 'updateHowto':            out = await updateHowto(who, body.guide); break;
         case 'sendTestPush':           out = await sendTestPush(who); break;
         case 'broadcastPush':          out = await broadcastPush(who, body); break;
         case 'getPickShip':            out = await getPickShip(who); break;

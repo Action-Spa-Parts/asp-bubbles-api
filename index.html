@@ -622,6 +622,17 @@
   .howto-mgr { margin-top:12px; border-top:1px dashed var(--border); padding-top:10px; }
   .howto-mgr-tag { display:inline-block; font-size:11px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--accent); margin-bottom:2px; }
   .howto-empty { color:var(--muted); font-size:14px; padding:10px 2px; }
+  .howto-editbar { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+  .howto-editrow { display:flex; align-items:center; gap:6px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); padding:10px 12px; margin-bottom:8px; }
+  .howto-editrow .howto-ename { flex:1; font-weight:600; min-width:0; }
+  .howto-editrow .howto-app-ico { font-size:20px; }
+  .howto-editrow button { padding:6px 9px; font-size:13px; }
+  .howto-efield { display:block; font-size:13px; font-weight:600; color:var(--muted); margin-bottom:12px; }
+  .howto-efield input, .howto-efield textarea { display:block; margin-top:4px; font:inherit; font-size:15px; font-weight:400; color:var(--text); padding:8px 10px; border:1px solid var(--border); border-radius:8px; width:100%; box-sizing:border-box; }
+  .howto-efield textarea { resize:vertical; }
+  .howto-echeck { display:flex; align-items:center; gap:8px; font-size:14px; margin-bottom:8px; }
+  .howto-ehint { font-size:12px; color:var(--muted); margin-bottom:14px; }
+  .howto-ebtns { display:flex; gap:8px; align-items:center; }
   .home-notify { max-width:520px; margin:18px auto 0; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); padding:14px 16px; display:flex; flex-direction:column; gap:12px; }
   .home-notify[hidden] { display:none; }
   .home-notify .notify-main { display:flex; gap:12px; align-items:flex-start; }
@@ -1353,6 +1364,10 @@
   <!-- ===== How-To Guide ===== -->
   <div id="howtoScreen" hidden>
     <div class="howto-wrap" data-noes>
+      <div class="howto-editbar" id="howtoEditBar" hidden>
+        <button class="ghost" id="howtoEditBtn">✎ Edit guide</button>
+        <button class="ghost" id="howtoAddBtn" hidden>+ Add section</button>
+      </div>
       <input type="text" class="howto-search" id="howtoSearch" placeholder="Search for an app…" autocomplete="off">
       <div id="howtoBody"></div>
     </div>
@@ -1562,6 +1577,32 @@
       <div style="display:flex; gap:8px; justify-content:flex-end;">
         <button class="ghost" id="confirmNo">Cancel</button>
         <button class="primary" id="confirmYes">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="howtoEditModal" hidden style="z-index:130;">
+  <div class="overlay-card" data-noes>
+    <div class="dhead">
+      <div class="dname">Edit section</div>
+      <button class="dclose" id="howtoEClose" aria-label="Close">&times;</button>
+    </div>
+    <div class="dbody">
+      <div class="howto-efield" style="display:flex; gap:10px;">
+        <label style="flex:0 0 70px;">Icon<input type="text" id="howtoEIcon" maxlength="4" placeholder="📦" style="width:100%;"></label>
+        <label style="flex:1;">Name<input type="text" id="howtoEName" placeholder="e.g. Box Counter" style="width:100%;"></label>
+      </div>
+      <label class="howto-efield">What is it? (one short line)<input type="text" id="howtoEWhat" placeholder="e.g. Count your packaging boxes." style="width:100%;"></label>
+      <label class="howto-efield">For everyone — one point per line<textarea id="howtoEEveryone" rows="4" placeholder="One instruction per line.&#10;Wrap *words* in asterisks to make them bold."></textarea></label>
+      <label class="howto-efield">For managers — one point per line<textarea id="howtoEManager" rows="4" placeholder="Manager-only steps (leave blank if none)."></textarea></label>
+      <label class="howto-echeck"><input type="checkbox" id="howtoEMgrOnly"> Only show this section to managers</label>
+      <div class="howto-ehint">Tip: wrap a word in *asterisks* to make it <b>bold</b>.</div>
+      <div class="howto-ebtns">
+        <button class="ghost danger" id="howtoEDelete" hidden>Delete</button>
+        <span style="flex:1;"></span>
+        <button class="ghost" id="howtoECancel">Cancel</button>
+        <button class="primary" id="howtoESave">Save</button>
       </div>
     </div>
   </div>
@@ -3289,28 +3330,115 @@ const HOWTO_APPS = [
       "<b>Settings</b> — manager PIN, alert email, closing days, box-count day, the late deadline + penalty, which home tiles show, the <b>Spanish</b> toggle, and <b>CSV export</b> of your data.",
     ] },
 ];
+// Render a stored/edited string safely: escape HTML, then turn *word* into bold.
+// (So manager-typed text can never inject HTML.)
+function howtoFmt(s) { return escapeHtml(String(s == null ? "" : s)).replace(/\*([^*]+)\*/g, "<b>$1</b>"); }
+// Convert the built-in default's <b>/&amp; into the friendly *bold*/& form the editor uses.
+function howtoDeHtml(s) { return String(s == null ? "" : s).replace(/<\/?b>/gi, "*").replace(/&amp;/g, "&"); }
+// The effective guide: the manager-saved version if any, else the built-in default (converted to friendly form).
+function howtoData() {
+  if (Array.isArray(state.howto)) return state.howto;
+  return HOWTO_APPS.map(a => ({
+    icon: a.icon, name: howtoDeHtml(a.name), what: howtoDeHtml(a.what || ""),
+    everyone: (a.everyone || []).map(howtoDeHtml), manager: (a.manager || []).map(howtoDeHtml), managerOnly: !!a.managerOnly,
+  }));
+}
+let howtoEdit = false;
 function renderHowto() {
   const q = howtoSearchQ.trim().toLowerCase();
   const isMgr = session.role === "manager";
-  const list = HOWTO_APPS.filter(a =>
-    (!a.managerOnly || isMgr) &&
-    (!q || (a.name + " " + a.keys).toLowerCase().includes(q)));
+  if (howtoEdit && !isMgr) howtoEdit = false;
+  const editBar = $("howtoEditBar"); if (editBar) editBar.hidden = !isMgr;
+  const editBtn = $("howtoEditBtn"); if (editBtn) editBtn.textContent = howtoEdit ? "✓ Done" : "✎ Edit guide";
+  const addBtn = $("howtoAddBtn"); if (addBtn) addBtn.hidden = !howtoEdit;
+  const searchEl = $("howtoSearch"); if (searchEl) searchEl.style.display = howtoEdit ? "none" : "";
+  const data = howtoData();
   const body = $("howtoBody");
-  if (!list.length) {
-    body.innerHTML = `<div class="howto-empty">No app matches your search. Try another word, or clear the box.</div>`;
+
+  if (howtoEdit) {
+    body.innerHTML = data.length ? data.map((a, i) => `
+      <div class="howto-editrow">
+        <span class="howto-app-ico">${howtoFmt(a.icon)}</span>
+        <span class="howto-ename">${howtoFmt(a.name)}${a.managerOnly ? ' <span class="howto-mgr-tag">mgr only</span>' : ""}</span>
+        <button class="ghost" data-hup="${i}" title="Move up">↑</button>
+        <button class="ghost" data-hdown="${i}" title="Move down">↓</button>
+        <button class="ghost" data-hedit="${i}">Edit</button>
+        <button class="ghost danger" data-hdel="${i}">Delete</button>
+      </div>`).join("") : `<div class="howto-empty">No sections yet. Tap “+ Add section”.</div>`;
+    body.querySelectorAll("[data-hedit]").forEach(b => b.addEventListener("click", () => openHowtoEdit(+b.dataset.hedit)));
+    body.querySelectorAll("[data-hdel]").forEach(b => b.addEventListener("click", () => deleteHowtoApp(+b.dataset.hdel)));
+    body.querySelectorAll("[data-hup]").forEach(b => b.addEventListener("click", () => moveHowtoApp(+b.dataset.hup, -1)));
+    body.querySelectorAll("[data-hdown]").forEach(b => b.addEventListener("click", () => moveHowtoApp(+b.dataset.hdown, 1)));
     return;
   }
-  const bullets = arr => `<ul>${arr.map(p => `<li>${p}</li>`).join("")}</ul>`;
+
+  const list = data.filter(a => (!a.managerOnly || isMgr) &&
+    (!q || (a.name + " " + a.what + " " + (a.everyone || []).join(" ") + " " + (a.manager || []).join(" ")).toLowerCase().includes(q)));
+  if (!list.length) { body.innerHTML = `<div class="howto-empty">No app matches your search. Try another word, or clear the box.</div>`; return; }
+  const bullets = arr => `<ul>${arr.map(p => `<li>${howtoFmt(p)}</li>`).join("")}</ul>`;
   body.innerHTML = list.map(a => {
-    let inner = a.what ? `<p class="howto-what">${a.what}</p>` : "";
+    let inner = a.what ? `<p class="howto-what">${howtoFmt(a.what)}</p>` : "";
     if (a.everyone && a.everyone.length) inner += bullets(a.everyone);
     if (isMgr && a.manager && a.manager.length)
       inner += `<div class="howto-mgr"><span class="howto-mgr-tag">For managers</span>${bullets(a.manager)}</div>`;
     return `<details class="howto-app"${q ? " open" : ""}>
-        <summary><span class="howto-app-ico">${a.icon}</span><span class="howto-app-name">${a.name}</span><span class="howto-chev">›</span></summary>
+        <summary><span class="howto-app-ico">${howtoFmt(a.icon)}</span><span class="howto-app-name">${howtoFmt(a.name)}</span><span class="howto-chev">›</span></summary>
         <div class="howto-app-body">${inner}</div>
       </details>`;
   }).join("");
+}
+// ----- Manager editing of the How-To Guide -----
+function toggleHowtoEdit() {
+  howtoEdit = !howtoEdit;
+  if (howtoEdit && !Array.isArray(state.howto)) state.howto = howtoData();   // materialize the default so edits build on it
+  renderHowto();
+}
+async function persistHowto() {
+  try {
+    const res = await apiCall("updateHowto", { guide: state.howto });
+    if (res && res.error) { alert(res.error); return; }
+    if (res && Array.isArray(res.howto)) state.howto = res.howto;
+  } catch (e) { alert("Couldn't save the guide — check your connection."); }
+}
+function moveHowtoApp(i, dir) {
+  const j = i + dir; if (j < 0 || j >= state.howto.length) return;
+  const t = state.howto[i]; state.howto[i] = state.howto[j]; state.howto[j] = t;
+  persistHowto(); renderHowto();
+}
+function deleteHowtoApp(i) {
+  const a = state.howto[i]; if (!a) return;
+  askConfirm(`Delete the “${a.name}” section from the guide?`, () => {
+    state.howto.splice(i, 1); persistHowto(); renderHowto();
+  }, { okText: "Delete" });
+}
+let howtoEditIdx = null;
+function openHowtoEdit(i) {
+  howtoEditIdx = (typeof i === "number") ? i : null;
+  const a = (howtoEditIdx != null) ? state.howto[howtoEditIdx] : { icon: "📄", name: "", what: "", everyone: [], manager: [], managerOnly: false };
+  $("howtoEIcon").value = a.icon || "";
+  $("howtoEName").value = a.name || "";
+  $("howtoEWhat").value = a.what || "";
+  $("howtoEEveryone").value = (a.everyone || []).join("\n");
+  $("howtoEManager").value = (a.manager || []).join("\n");
+  $("howtoEMgrOnly").checked = !!a.managerOnly;
+  $("howtoEDelete").hidden = (howtoEditIdx == null);
+  $("howtoEditModal").hidden = false;
+}
+function saveHowtoEdit() {
+  const lines = v => v.split("\n").map(s => s.trim()).filter(Boolean);
+  const a = {
+    icon: $("howtoEIcon").value.trim() || "📄",
+    name: $("howtoEName").value.trim(),
+    what: $("howtoEWhat").value.trim(),
+    everyone: lines($("howtoEEveryone").value),
+    manager: lines($("howtoEManager").value),
+    managerOnly: $("howtoEMgrOnly").checked,
+  };
+  if (!a.name) { alert("Give the section a name."); return; }
+  if (!Array.isArray(state.howto)) state.howto = howtoData();
+  if (howtoEditIdx != null) state.howto[howtoEditIdx] = a; else state.howto.push(a);
+  $("howtoEditModal").hidden = true;
+  persistHowto(); renderHowto();
 }
 
 function showScreen(name) {
@@ -5672,6 +5800,7 @@ function applyData(data) {
   state.deadlineLabel = data.deadlineLabel;
   state.settings   = data.settings || null;
   state.tiles      = data.tiles || {};
+  if (!howtoEdit) state.howto = Array.isArray(data.howto) ? data.howto : null;   // don't clobber a mid-edit draft
   state.checklist = data.checklist || null;
   if (data.role) session.role = data.role;
   if (data.name) session.name = data.name;
@@ -6529,6 +6658,12 @@ $("tileEom").addEventListener("click", () => showScreen("eom"));
 $("tileResources").addEventListener("click", () => showScreen("resources"));
 $("tileHowto").addEventListener("click", () => showScreen("howto"));
 $("howtoSearch").addEventListener("input", (e) => { howtoSearchQ = e.target.value; renderHowto(); });
+$("howtoEditBtn").addEventListener("click", toggleHowtoEdit);
+$("howtoAddBtn").addEventListener("click", () => openHowtoEdit(null));
+$("howtoESave").addEventListener("click", saveHowtoEdit);
+$("howtoECancel").addEventListener("click", () => { $("howtoEditModal").hidden = true; });
+$("howtoEClose").addEventListener("click", () => { $("howtoEditModal").hidden = true; });
+$("howtoEDelete").addEventListener("click", () => { const i = howtoEditIdx; $("howtoEditModal").hidden = true; if (i != null) deleteHowtoApp(i); });
 $("resAddBtn").addEventListener("click", () => openResourceModal(null));
 $("resModalClose").addEventListener("click", closeResourceModal);
 $("resCancelBtn").addEventListener("click", closeResourceModal);
