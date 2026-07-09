@@ -915,6 +915,12 @@
   .ps-over100-chip { font-size:13px; font-weight:600; padding:5px 11px; border-radius:99px; border:1px solid var(--good); color:var(--good); background:var(--surface); }
   .ps-over100-chip .n { color:var(--muted); font-weight:600; margin-left:4px; }
   .ps-over100-none { margin-top:6px; font-size:13px; color:var(--muted); }
+  /* Google website translator — hide its banner/tooltip and keep our layout put. */
+  #google_translate_element { display:none; }
+  .goog-te-banner-frame, .goog-te-gadget-icon, .skiptranslate iframe, iframe.goog-te-banner-frame { display:none !important; }
+  body { top:0 !important; }
+  .goog-tooltip, #goog-gt-tt, .goog-te-balloon-frame { display:none !important; }
+  font font { background:transparent !important; box-shadow:none !important; }
   .cl-item.locked { opacity:0.45; }
   .cl-item .cl-lock { margin-left:auto; font-size:14px; }
   .cl-acat { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
@@ -1391,6 +1397,7 @@
 
 </div>
 
+<div id="google_translate_element" aria-hidden="true"></div>
 <nav class="bottomnav">
   <button class="navbtn active" data-view="balances">
     <span class="navicon">★</span><span>Balances</span>
@@ -1836,6 +1843,46 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js").catch(() => {});
   });
 }
+
+/* ---------- Spanish translation (Google website translator, per-device toggle) ----------
+   A manager flips this on in Settings. We store the choice in localStorage so it
+   stays on for whoever uses that device. When on, we set the googtrans cookie and
+   load Google's translator, which translates the whole rendered page — including
+   the checklist tasks / rewards / earn rules that come from the database — and
+   keeps translating content as it's added (it watches the DOM). When off, the
+   script is never loaded, so English users are completely unaffected. */
+function aspLangEs() { return localStorage.getItem("aspLang") === "es"; }
+function aspSetTransCookie(on) {
+  if (on) {
+    document.cookie = "googtrans=/en/es;path=/";
+  } else {
+    document.cookie = "googtrans=;path=/;expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  }
+}
+// Global callback the Google script invokes once it loads.
+function googleTranslateElementInit() {
+  try {
+    new google.translate.TranslateElement(
+      { pageLanguage: "en", includedLanguages: "es", autoDisplay: false },
+      "google_translate_element");
+  } catch (e) {}
+}
+function aspLoadGoogleTranslate() {
+  if (document.getElementById("goog-te-script")) return;
+  const s = document.createElement("script");
+  s.id = "goog-te-script";
+  s.src = "https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit";
+  document.head.appendChild(s);
+}
+// Called by the Settings toggle. Persists the choice and reloads so the page
+// loads in the chosen language cleanly.
+function aspSetSpanish(on) {
+  localStorage.setItem("aspLang", on ? "es" : "en");
+  aspSetTransCookie(on);
+  location.reload();
+}
+// On boot: if Spanish is the saved preference, translate right away.
+if (aspLangEs()) { aspSetTransCookie(true); aspLoadGoogleTranslate(); }
 
 /* ---------- Offline-fallback sample data (only used if the server call fails) ---------- */
 
@@ -5460,6 +5507,12 @@ function renderSettingsAdmin() {
     </div>
 
     <div class="sset">
+      <div class="ftitle2">Español — translate to Spanish</div>
+      <div class="muted" style="font-size:12.5px; margin:2px 0 8px;">Translates the whole app to Spanish (including checklist tasks, rewards, and earn rules). Applies to <strong>this device only</strong> and stays on until turned off. The page reloads when you switch.</div>
+      <label class="sset-day"><input type="checkbox" id="setSpanish" ${aspLangEs() ? "checked" : ""}> Spanish / Español</label>
+    </div>
+
+    <div class="sset">
       <div class="ftitle2">Export data (CSV)</div>
       <div class="muted" style="font-size:12.5px; margin:2px 0 8px;">Download a spreadsheet of the current data (opens in Excel / Google Sheets).</div>
       <div class="sset-days">
@@ -5473,6 +5526,7 @@ function renderSettingsAdmin() {
     <div style="margin-top:18px;"><button class="primary" id="setSaveBtn">Save settings</button></div>
   `;
   $("setSaveBtn").addEventListener("click", saveSettings);
+  $("setSpanish").addEventListener("change", (e) => aspSetSpanish(e.target.checked));
   $("expBalances").addEventListener("click", exportBalances);
   $("expAwards").addEventListener("click", exportAwards);
   $("expChecklist").addEventListener("click", exportChecklistCsv);
