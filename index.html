@@ -607,12 +607,21 @@
   .app-tile.tv { box-shadow:none; border-style:dashed; }
   /* How-To Guide */
   .howto-wrap { max-width:760px; margin:0 auto; }
-  .howto-intro { color:var(--muted); font-size:13.5px; margin-bottom:6px; }
-  .howto-sec-title { font-size:13px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--accent); margin:22px 0 10px; }
-  .howto-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); padding:14px 16px; margin-bottom:10px; }
-  .howto-card h4 { margin:0 0 6px; font-size:15.5px; font-weight:700; }
-  .howto-card ul { margin:0; padding-left:20px; }
-  .howto-card li { margin:5px 0; font-size:14px; line-height:1.5; }
+  .howto-search { width:100%; box-sizing:border-box; font-size:15px; padding:11px 14px; border:1px solid var(--border); border-radius:12px; background:var(--surface); margin-bottom:14px; }
+  .howto-app { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); margin-bottom:10px; overflow:hidden; }
+  .howto-app > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:12px; padding:14px 16px; font-size:16px; font-weight:700; }
+  .howto-app > summary::-webkit-details-marker { display:none; }
+  .howto-app-ico { font-size:22px; line-height:1; }
+  .howto-app-name { flex:1; }
+  .howto-chev { color:var(--muted); font-size:20px; transition:transform .15s ease; }
+  .howto-app[open] .howto-chev { transform:rotate(90deg); }
+  .howto-app-body { padding:0 16px 14px; }
+  .howto-what { color:var(--muted); font-size:13.5px; margin:0 0 8px; }
+  .howto-app-body ul { margin:0; padding-left:20px; }
+  .howto-app-body li { margin:5px 0; font-size:14px; line-height:1.5; }
+  .howto-mgr { margin-top:12px; border-top:1px dashed var(--border); padding-top:10px; }
+  .howto-mgr-tag { display:inline-block; font-size:11px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--accent); margin-bottom:2px; }
+  .howto-empty { color:var(--muted); font-size:14px; padding:10px 2px; }
   .home-notify { max-width:520px; margin:18px auto 0; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-card); padding:14px 16px; display:flex; flex-direction:column; gap:12px; }
   .home-notify[hidden] { display:none; }
   .home-notify .notify-main { display:flex; gap:12px; align-items:flex-start; }
@@ -1343,7 +1352,10 @@
 
   <!-- ===== How-To Guide ===== -->
   <div id="howtoScreen" hidden>
-    <div class="howto-wrap" id="howtoBody" data-noes></div>
+    <div class="howto-wrap" data-noes>
+      <input type="text" class="howto-search" id="howtoSearch" placeholder="Search for an app…" autocomplete="off">
+      <div id="howtoBody"></div>
+    </div>
   </div>
 
   <!-- ===== Label Printer app ===== -->
@@ -3169,89 +3181,136 @@ function renderPickShip() {
 }
 
 // Top-level app screen switch: "home" | "bubbles" | "checklist".
-// In-app help. Employee section always shows; the manager section only renders
-// when signed in as a manager. Content is plain HTML authored here (no user input).
-function renderHowto() {
-  const card = (title, points) =>
-    `<div class="howto-card"><h4>${title}</h4><ul>${points.map(p => `<li>${p}</li>`).join("")}</ul></div>`;
-
-  const employee = [
-    ["Signing in", [
-      "Enter your <b>4–6 digit PIN</b> on the sign-in screen and tap <b>Sign in</b>.",
-      "No PIN yet? Ask a manager — they set it up under Manage → People.",
-    ]],
-    ["Getting around", [
-      "After signing in you land on the <b>home screen</b> of app tiles. Tap a tile to open that tool.",
-      "Tap <b>⌂ Home</b> (top-left) anytime to come back, or <b>Log out</b> when you're done on a shared device.",
-    ]],
-    ["Bubbles (rewards)", [
+// In-app help, organized APP BY APP. Each app explains itself for everyone, with
+// a "For managers" block that only shows to managers. A search box filters to the
+// app you're looking for. Content is plain HTML authored here (no user input);
+// the whole guide is inside a data-noes wrapper so it stays English.
+let howtoSearchQ = "";
+const HOWTO_APPS = [
+  { icon: "🔑", name: "Signing in &amp; Home", keys: "login sign in pin password home tiles log out start",
+    what: "How to get in and move around the app.",
+    everyone: [
+      "Enter your <b>4–6 digit PIN</b> and tap <b>Sign in</b>. No PIN? Ask a manager.",
+      "You land on the <b>home screen</b> of app tiles — tap one to open it.",
+      "<b>⌂ Home</b> (top-left) brings you back; <b>Log out</b> when you're done on a shared device.",
+      "Tap <b>Enable notifications</b> on the home screen to get a pop-up when it's your turn to close.",
+    ],
+    manager: [
+      "Managers can also use <b>Admin sign in</b> (email + password), and see the <b>⚙ Manage</b> button and <b>Award</b> controls.",
+      "Turn <b>Spanish</b> on for a device in <b>⚙ Manage → Settings</b> — it only affects that device.",
+    ] },
+  { icon: "🫧", name: "Bubbles", keys: "bubbles rewards points leaderboard balance redeem prizes earn activity",
+    what: "Points (“bubbles”) for good work that you redeem for rewards.",
+    everyone: [
       "<b>Balances</b> — the leaderboard: everyone's bubble totals.",
-      "<b>How to earn</b> — every way to earn (and lose) bubbles.",
+      "<b>How to earn</b> — every way to earn (or lose) bubbles.",
       "<b>Rewards</b> — tap <b>Redeem</b> on a prize, then <b>Request it</b>. A manager approves it, then you collect it.",
       "<b>Activity</b> — your own bubble history.",
-    ]],
-    ["Closing checklist", [
-      "When it's your turn, the <b>Closing Checklist</b> tile turns red and says <b>your turn</b>.",
-      "Open it, tap <b>Start</b>, then tick each task <b>in order</b> — the next one unlocks after the one above.",
-      "Tap <b>Submit</b> once every task is done. Do it before you leave, and start on time — starting late or leaving it unfinished can cost bubbles.",
-    ]],
-    ["Employee of the Month", [
-      "During the voting window, open the tile and <b>vote once</b> for a coworker.",
-      "You can't vote for yourself, and your vote is <b>final</b> once you pick.",
-    ]],
-    ["Box Counter", [
-      "Enter the current count for each box size and tap <b>Save</b>. It's usually done once a week.",
-    ]],
-    ["Morning meeting credit", [
-      "On the <b>Warehouse TV</b>, tap <b>“I led the morning meeting”</b> and enter your PIN. A manager approves it and you get the bubbles.",
-    ]],
-    ["Reminders", [
-      "On the home screen, tap <b>Enable notifications</b> to get a pop-up on your device when it's your turn to close.",
-    ]],
-  ];
-
-  const manager = [
-    ["Signing in as a manager", [
-      "Use the <b>manager PIN</b>, or tap <b>Admin sign in</b> and use your email + password.",
-      "Managers see extra controls: <b>Award</b>, the <b>⚙ Manage</b> button, and approval alerts.",
-    ]],
-    ["Giving bubbles", [
-      "Go to <b>Bubbles → Balances</b>, tap a person, then pick a <b>reason</b> (an earn rule) or use <b>“Give bubbles for any reason”</b> with a custom amount.",
-      "Use <b>Award whole team</b> for team-wide rules. <b>Penalties</b> are just earn rules with a minus amount.",
-    ]],
-    ["Approving rewards & credits", [
-      "In <b>Bubbles → Rewards</b>, approve or deny redemption requests, then tap <b>Mark given</b> once handed out.",
-      "<b>Morning-meeting credits</b> and <b>closing-checklist flags</b> also show up here to approve.",
-    ]],
-    ["Manage (⚙)", [
-      "<b>Earn rules</b> — add, edit, turn off, or delete ways to earn (and penalties).",
-      "<b>Rewards</b> — add, edit, or delete prizes.",
-      "<b>People</b> — add employees, set/see their PIN, or remove someone from the checklist, voting, or the whole app (their history is kept).",
-      "<b>Admins</b> — approve new manager sign-ups; add or deactivate admins.",
-      "<b>Checklist</b> — review each day; turn on <b>Check mode</b> to fix a wrong tick, <b>Flag &amp; deduct</b>, reassign who's closing, or restart the order.",
-      "<b>Notifications</b> — turn reminders on and send a message to all devices.",
-      "<b>Settings</b> — manager PIN, alert email, closing days, box-count day, late deadline + penalty, which tiles show, the <b>Spanish</b> toggle, and <b>CSV export</b>.",
-    ]],
-    ["Picks &amp; Ships", [
-      "A manager-only tab in Bubbles showing each picker's stats and the <b>daily/weekly winners</b>, live from the picking dashboard.",
-    ]],
-    ["Reviewing the closing checklist", [
-      "Expand any day to see who closed, when they <b>started and submitted</b>, and the time spent per task.",
-      "Flag anything that wasn't actually done — approving the flag deducts the penalty.",
-    ]],
-    ["Label printer", [
-      "Set up printers and cloud printing under <b>Manage → Label Printer</b> (step-by-step instructions are on that screen).",
-    ]],
-  ];
-
-  let html = `<div class="howto-intro">Tap <b>⌂ Home</b> anytime to go back. Here's how everything works.</div>`;
-  html += `<div class="howto-sec-title">For everyone</div>`;
-  html += employee.map(([t, p]) => card(t, p)).join("");
-  if (session.role === "manager") {
-    html += `<div class="howto-sec-title">For managers</div>`;
-    html += manager.map(([t, p]) => card(t, p)).join("");
+    ],
+    manager: [
+      "Give bubbles: tap a person on <b>Balances</b> → pick a reason (an earn rule) or <b>Give bubbles for any reason</b>. Use <b>Award whole team</b> for team rules; penalties are minus amounts.",
+      "Approve redemptions in the <b>Rewards</b> tab (morning-meeting credits and checklist flags show here too), then tap <b>Mark given</b> once handed out.",
+    ] },
+  { icon: "📋", name: "Closing Checklist", keys: "closing checklist end of day tasks lock up",
+    what: "The end-of-day tasks — the app assigns whose turn it is.",
+    everyone: [
+      "When it's your turn, the tile turns red and says <b>your turn</b>.",
+      "Open it → tap <b>Start</b> → tick each task <b>in order</b> → <b>Submit</b>.",
+      "Do it before you leave and start on time — starting late or leaving it unfinished can cost bubbles.",
+    ],
+    manager: [
+      "<b>Whose turn it is</b> — the app rotates through everyone eligible <b>alphabetically</b>, then restarts A→Z once everyone's had a turn. Today's closer shows at the top of the review and on the sign-in screen.",
+      "<b>Someone's out?</b> Use the <b>“Doing it:”</b> dropdown on today's run to hand it to anyone active, or tap <b>🔄 Restart order from the top</b> to re-line-up A→Z.",
+      "<b>Started late?</b> If the closer didn't tap Start by the deadline (set in Settings), the run is flagged late — you then tap <b>Apply penalty</b> to deduct bubbles. Nothing is deducted automatically.",
+      "<b>Something ticked that wasn't done?</b> Turn on <b>Check mode</b>, tap <b>Flag</b> on that task with a note, then approve the flag in <b>Bubbles → Rewards</b> to apply the penalty.",
+      "Expand any past day to see who closed, the <b>start/submit times</b>, and time per task. You can also delete an old run that was never completed.",
+    ] },
+  { icon: "📦", name: "Box Counter", keys: "box counter boxes count packaging inventory reorder sizes low stock disregard",
+    what: "Keep a running count of your packaging box sizes.",
+    everyone: [
+      "<b>Grab the tablet</b> and take it to the back to fill out the count.",
+      "<b>Count</b> tab — enter the current count for each size. You'll see the difference vs. the recorded stock plus a <b>Low</b>/<b>Out</b> flag; tap <b>Save</b> to set the stock to your count.",
+      "You can count <b>any day</b> — it's recorded for that week.",
+      "<b>Sizes</b> tab — adjust a size's quantity, set or clear its <b>Low ≤</b> alert, or <b>Disregard</b> a size that doesn't need counting.",
+      "<b>Reorders</b> tab — every size at or below its low alert, so you know what to restock.",
+      "<b>Activity</b> tab — who counted or changed a size, and when.",
+    ],
+    manager: [
+      "<b>Remove</b> a size entirely with 🗑 (and <b>Restore</b> it later) — to clean up sizes you no longer stock.",
+      "Choose which day the count is “due” in <b>⚙ Manage → Settings → Box count day</b> (it can still be counted any day).",
+      "The <b>Low ≤</b> alerts are what drive the Reorders list (and the low-stock email, if it's turned on).",
+    ] },
+  { icon: "🏆", name: "Employee of the Month", keys: "employee of the month vote voting eom winner",
+    what: "Vote for a coworker each month.",
+    everyone: [
+      "During the voting window, open the tile and <b>vote once</b> — you can't vote for yourself, and it's final once you pick.",
+    ],
+    manager: [
+      "In <b>⚙ Manage → Emp. of Month</b> you can edit votes or pick a tie-break winner.",
+    ] },
+  { icon: "🏷️", name: "Label Printer", keys: "label printer labels print zebra barcode part",
+    what: "Reprint barcode labels on the Zebra printer.",
+    everyone: [
+      "Scan a part (or type the number), set the quantity, then tap <b>Print</b>.",
+    ],
+    manager: [
+      "Add printers and set up cloud printing under <b>⚙ Manage → Label Printer</b> (step-by-step instructions are on that screen).",
+    ] },
+  { icon: "🔗", name: "Imported Resources", keys: "imported resources links",
+    what: "Quick links to other tools and pages.",
+    everyone: [
+      "Tap a link to open it in a new tab.",
+    ],
+    manager: [
+      "Add or edit links with <b>+ Add link</b> and the <b>✎ Edit</b> button on each card.",
+    ] },
+  { icon: "📺", name: "Warehouse TV", keys: "warehouse tv wall display morning meeting",
+    what: "The always-on wall display (no login needed).",
+    everyone: [
+      "Shows the leaderboard, recent activity, and tonight's closing status.",
+      "Tap <b>“I led the morning meeting”</b> and enter your PIN to get credit (a manager approves it).",
+    ],
+    manager: [] },
+  { icon: "📈", name: "Picks &amp; Ships", keys: "picks ships picking shipping stats winners performance", managerOnly: true,
+    what: "Live picking &amp; shipping performance (managers only).",
+    everyone: [],
+    manager: [
+      "A tab inside Bubbles showing each picker's <b>picks, orders, and rate</b>, who's passed 100 lines, and the <b>daily &amp; weekly winners</b> — live from the picking dashboard.",
+    ] },
+  { icon: "⚙️", name: "Manage &amp; Settings", keys: "manage settings admin earn rules rewards people admins notifications export", managerOnly: true,
+    what: "The manager control panel (the ⚙ button).",
+    everyone: [],
+    manager: [
+      "<b>Add a person</b> — People tab → <b>+ Add a person</b> → enter their name, a <b>4–6 digit PIN</b>, and (optional) a starting balance/email → Save. They sign in with that PIN. To offboard, use <b>Remove from app</b> (keeps their history — Restore anytime), or just take them off the checklist/voting.",
+      "<b>Earn rules</b> — Earn rules tab → <b>+ Add an earn rule</b>: name it, set the bubble amount (use a <b>minus</b> number for a penalty), pick a category, and tick <b>Whole-team</b> if it applies to everyone. <b>Turn off</b> pauses a rule; <b>Delete</b> removes it (past awards aren't affected).",
+      "<b>Rewards</b> — Rewards tab → add a prize with its bubble <b>cost</b>. <b>Turn off</b> hides it; <b>Delete</b> removes it (only if it has no redemption history).",
+      "<b>Admins</b> — approve or deny new manager sign-ups, and add/deactivate admins. Each admin logs in with email + password; the <b>manager PIN</b> (in Settings) is the quick shared way in.",
+      "<b>Notifications</b> — turn reminders on, then each device taps <b>Enable</b> to opt in. Use <b>Send a message to all devices</b> to broadcast a note.",
+      "<b>Settings</b> — manager PIN, alert email, closing days, box-count day, the late deadline + penalty, which home tiles show, the <b>Spanish</b> toggle, and <b>CSV export</b> of your data.",
+    ] },
+];
+function renderHowto() {
+  const q = howtoSearchQ.trim().toLowerCase();
+  const isMgr = session.role === "manager";
+  const list = HOWTO_APPS.filter(a =>
+    (!a.managerOnly || isMgr) &&
+    (!q || (a.name + " " + a.keys).toLowerCase().includes(q)));
+  const body = $("howtoBody");
+  if (!list.length) {
+    body.innerHTML = `<div class="howto-empty">No app matches your search. Try another word, or clear the box.</div>`;
+    return;
   }
-  $("howtoBody").innerHTML = html;
+  const bullets = arr => `<ul>${arr.map(p => `<li>${p}</li>`).join("")}</ul>`;
+  body.innerHTML = list.map(a => {
+    let inner = a.what ? `<p class="howto-what">${a.what}</p>` : "";
+    if (a.everyone && a.everyone.length) inner += bullets(a.everyone);
+    if (isMgr && a.manager && a.manager.length)
+      inner += `<div class="howto-mgr"><span class="howto-mgr-tag">For managers</span>${bullets(a.manager)}</div>`;
+    return `<details class="howto-app"${q ? " open" : ""}>
+        <summary><span class="howto-app-ico">${a.icon}</span><span class="howto-app-name">${a.name}</span><span class="howto-chev">›</span></summary>
+        <div class="howto-app-body">${inner}</div>
+      </details>`;
+  }).join("");
 }
 
 function showScreen(name) {
@@ -3289,7 +3348,7 @@ function showScreen(name) {
   if (name === "eom") { switchEomTab("vote"); loadEom(); }
   if (name === "label") initLabelPrinter();
   if (name === "resources") loadResources();
-  if (name === "howto") renderHowto();
+  if (name === "howto") { howtoSearchQ = ""; if ($("howtoSearch")) $("howtoSearch").value = ""; renderHowto(); }
   if (name === "home") updateNotifyUI();
 }
 
@@ -6469,6 +6528,7 @@ $("tileBoxCounter").addEventListener("click", () => showScreen("boxcounter"));
 $("tileEom").addEventListener("click", () => showScreen("eom"));
 $("tileResources").addEventListener("click", () => showScreen("resources"));
 $("tileHowto").addEventListener("click", () => showScreen("howto"));
+$("howtoSearch").addEventListener("input", (e) => { howtoSearchQ = e.target.value; renderHowto(); });
 $("resAddBtn").addEventListener("click", () => openResourceModal(null));
 $("resModalClose").addEventListener("click", closeResourceModal);
 $("resCancelBtn").addEventListener("click", closeResourceModal);
