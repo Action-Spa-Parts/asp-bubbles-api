@@ -3967,8 +3967,11 @@ app.post('/', async (req, res) => {
     if (rateLimited) loginRateRecord(rlKey(req), !(out && out.error));
     res.json(out);
   } catch (err) {
-    console.error('handler error:', err);
-    res.status(500).json({ error: String(err.message || err) });
+    // Log the full error server-side (visible in Railway logs) for debugging, but
+    // return a GENERIC message to the client — never echo err.message, which can
+    // leak internals (stack traces, SQL, table/column names) to any caller.
+    console.error(`handler error [action=${body && body.action}]:`, err);
+    res.status(500).json({ error: 'Something went wrong on our end. Please try again.' });
   }
 });
 
