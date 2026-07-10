@@ -24,14 +24,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { Pool } = pg;
 
 const DATABASE_URL  = process.env.DATABASE_URL;
-const MANAGER_PIN   = process.env.MANAGER_PIN || '1234';
+// Break-glass manager PIN. If the env var is ever missing we FAIL CLOSED: use a
+// random, unguessable value (which nobody can type) rather than a well-known
+// default like "1234" that would silently hand out manager access. Admins can
+// still sign in with email + password; set MANAGER_PIN in Railway to restore the
+// break-glass PIN.
+const MANAGER_PIN   = process.env.MANAGER_PIN || ('disabled-' + crypto.randomBytes(24).toString('hex'));
 const MANAGER_EMAIL = process.env.MANAGER_EMAIL || '';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '138';
+const APP_VERSION = '139';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -39,7 +44,7 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 if (!process.env.MANAGER_PIN) {
-  console.warn('WARNING: MANAGER_PIN is not set — using the default "1234". Set it in Railway → Variables.');
+  console.warn('WARNING: MANAGER_PIN is not set — the break-glass PIN is DISABLED (random). Admins can still log in with email + password. Set MANAGER_PIN in Railway → Variables to enable it.');
 }
 
 // SSL is only needed for Railway's public proxy URLs (rlwy.net / railway.app).
@@ -1921,6 +1926,16 @@ async function setAdminActive(who, id, active) {
   if (!isManager(who)) return { error: 'Manager only' };
   const aid = cleanInt(id);
   if (aid === null) return { error: 'Bad admin id' };
+  if (!active) {
+    // Never let the LAST active admin be deactivated — that would remove every
+    // password login and leave only the break-glass Manager PIN to recover.
+    const { rows } = await pool.query(
+      `SELECT (SELECT COUNT(*)::int FROM admins WHERE active = true) AS active_n,
+              (SELECT active FROM admins WHERE id = $1) AS is_active`, [aid]);
+    if (rows[0].is_active && rows[0].active_n <= 1) {
+      return { error: "That's the only active admin — add or reactivate another admin before deactivating this one." };
+    }
+  }
   await pool.query('UPDATE admins SET active=$1 WHERE id=$2', [!!active, aid]);
   if (!active) await pool.query('DELETE FROM admin_sessions WHERE admin_id=$1', [aid]); // revoke logins
   return { ok: true };
@@ -3686,7 +3701,9 @@ async function broadcastPush(who, body) {
 // browser can't call it directly. We proxy it server-side for managers: pull its
 // live JSON, aggregate the per-picker picking numbers, and hand back a clean
 // shape for the "Picks & Ships" tab. Read-only — nothing is stored.
-const PICKSHIP_BASE = 'https://picking-shipping.up.railway.app';
+// The separate picking-shipping dashboard Picks & Ships reads from. Overridable
+// via env so it can be repointed without a code edit if that app ever moves.
+const PICKSHIP_BASE = process.env.PICKSHIP_BASE || 'https://picking-shipping.up.railway.app';
 
 async function fetchJson(url, ms) {
   const ac = new AbortController();

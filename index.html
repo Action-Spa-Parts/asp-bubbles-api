@@ -2830,12 +2830,26 @@ async function confirmRedeem() {
 }
 
 async function resolveRequest(row, approve) {
-  try {
-    const res = await apiCall("resolve", { pin: session.pin, row: row, approve: approve });
-    if (res.error) { setStatus(res.error, "error"); }
-    fetchData();
-  } catch (err) {
-    setStatus("Error: " + (err && err.message ? err.message : err), "error");
+  const doIt = async () => {
+    try {
+      const res = await apiCall("resolve", { pin: session.pin, row: row, approve: approve });
+      if (res.error) { setStatus(res.error, "error"); }
+      else setStatus(approve ? "Reward approved." : "Request denied.", "ok");
+      fetchData();
+    } catch (err) {
+      setStatus("Error: " + (err && err.message ? err.message : err), "error");
+    }
+  };
+  // Approving deducts the reward's full cost and CANNOT be undone (redemptions are
+  // excluded from Undo) — confirm first so a mis-tap doesn't drain someone's bubbles.
+  if (approve) {
+    const p = (state.pending || []).find(x => String(x._row) === String(row));
+    const who = p ? p.Name : "this person";
+    const what = p ? p.Reward : "this reward";
+    const cost = p ? Number(p.Cost).toLocaleString() : "";
+    askConfirm(`Approve ${who}'s "${what}"${cost ? " and deduct " + cost + " bubbles" : ""}? This can't be undone.`, doIt, { okText: "Approve" });
+  } else {
+    doIt();
   }
 }
 
@@ -5129,14 +5143,18 @@ function renderChecklistReadonly(items) {
 
 async function startChecklistNow() {
   const btn = $("clStartBtn");
+  const reset = () => { if (btn) { btn.disabled = false; btn.textContent = "▶ Start closing checklist"; } };
   if (btn) { btn.disabled = true; btn.textContent = "Starting…"; }
-  const res = await apiCall("startChecklist", { pin: session.pin });
-  if (res && res.error) {
-    alert(res.error);
-    if (btn) { btn.disabled = false; btn.textContent = "▶ Start closing checklist"; }
-    return;
+  try {
+    const res = await apiCall("startChecklist", { pin: session.pin });
+    if (res && res.error) { alert(res.error); reset(); return; }
+    await loadChecklist();   // re-fetch → started=true → reveals the task list
+  } catch (err) {
+    // Network hiccup: don't leave the button stuck on "Starting…" — restore it so
+    // the closer can try again (otherwise they'd be blocked and flagged late).
+    alert("Couldn't start the checklist — check your connection and try again.");
+    reset();
   }
-  await loadChecklist();   // re-fetch → started=true → reveals the task list
 }
 
 async function submitChecklistNow() {
@@ -6722,9 +6740,21 @@ function renderAdminAdmin() {
       </div>`;
   }).join("");
   el.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => editAdmin(parseInt(b.dataset.edit, 10))));
-  el.querySelectorAll("[data-toggle]").forEach(b => b.addEventListener("click", () => adminSave("setAdminActive", { id: parseInt(b.dataset.toggle, 10), active: b.dataset.active === "1" })));
+  el.querySelectorAll("[data-toggle]").forEach(b => b.addEventListener("click", () => {
+    const id = parseInt(b.dataset.toggle, 10);
+    const activate = b.dataset.active === "1";
+    if (activate) { adminSave("setAdminActive", { id: id, active: true }); return; }
+    const a = (state.admin.admins || []).find(x => x.id === id);
+    askConfirm(`Deactivate ${a ? a.name : "this admin"}? They won't be able to sign in until you reactivate them.`,
+      () => adminSave("setAdminActive", { id: id, active: false }), { okText: "Deactivate" });
+  }));
   el.querySelectorAll("[data-approve]").forEach(b => b.addEventListener("click", () => adminSave("approveAdmin", { id: parseInt(b.dataset.approve, 10) })));
-  el.querySelectorAll("[data-deny]").forEach(b => b.addEventListener("click", () => adminSave("denyAdmin", { id: parseInt(b.dataset.deny, 10) })));
+  el.querySelectorAll("[data-deny]").forEach(b => b.addEventListener("click", () => {
+    const id = parseInt(b.dataset.deny, 10);
+    const a = (state.admin.admins || []).find(x => x.id === id);
+    askConfirm(`Deny ${a ? a.name : "this"} admin request? They'll have to sign up again.`,
+      () => adminSave("denyAdmin", { id: id }), { okText: "Deny" });
+  }));
 }
 function showAdminForm(a) {
   $("adminFormTitle").textContent = a ? "Edit admin" : "New admin";
