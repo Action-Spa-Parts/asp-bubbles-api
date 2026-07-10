@@ -1447,6 +1447,23 @@
           </ul>
         </div>
       </details>
+      <details class="lp-setup" id="lpPrMgrWrap" hidden>
+        <summary>🖨️ Manage printers</summary>
+        <div class="lp-setupbody">
+          <div class="muted" style="font-size:12.5px; margin-bottom:8px;">Add, rename, or remove the printers everyone can choose from when printing. The <b>serial</b> is on the printer's label or in your Zebra account.</div>
+          <div id="lpspList"></div>
+          <div style="margin-top:10px; border-top:1px solid var(--line,#eee); padding-top:10px;">
+            <div style="font-weight:600; font-size:13px; margin-bottom:6px;" id="lpspFormTitle">Add a printer</div>
+            <input id="lpspName" type="text" autocomplete="off" placeholder="Printer name (e.g. Receiving)" style="width:100%; max-width:320px; font-size:16px; padding:9px; margin-bottom:6px;">
+            <input id="lpspSerial" type="text" autocomplete="off" placeholder="Serial number" style="width:100%; max-width:320px; font-size:16px; padding:9px;">
+            <div style="margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button class="primary lp-mini" id="lpspAdd">Add printer</button>
+              <button class="ghost lp-mini" id="lpspCancel" hidden>Cancel</button>
+              <span id="lpspMsg" style="font-size:12.5px; color:var(--danger);"></span>
+            </div>
+          </div>
+        </div>
+      </details>
       </div><!-- /lpPrintView -->
       <div id="lpActivityView" hidden>
         <h2 class="section" style="font-size:16px; margin-top:0;">Print activity</h2>
@@ -3361,6 +3378,7 @@ const HOWTO_APPS = [
     ],
     manager: [
       "Add printers and set up cloud printing under <b>⚙ Manage → Label Printer</b> (step-by-step instructions are on that screen).",
+      "<b>Let someone else manage printers</b> — in <b>Manage → People</b>, tap <b>Let manage printers</b> on that person (e.g. whoever runs receiving). They then get a <b>🖨️ Manage printers</b> panel right on the Label Printer screen to add/edit/remove printers — with no other manager access. Tap <b>Remove printer access</b> to take it back.",
     ] },
   { icon: "🔗", name: "Imported Resources", keys: "imported resources links",
     what: "Quick links to other tools and pages.",
@@ -3954,6 +3972,12 @@ function lpShowPrinterStatus(s) {
   const mgr = !!s.bridgeToken;
   const nav = $("lpNav"); if (nav) nav.hidden = !mgr;
   const na = $("lpNavActivity"); if (na) na.hidden = !mgr;
+  // "Manage printers" panel: managers + employees granted the printer-admin permission.
+  const prmgr = $("lpPrMgrWrap");
+  if (prmgr) {
+    if (s.canManagePrinters) { prmgr.hidden = false; renderLpspPrinters(); }
+    else prmgr.hidden = true;
+  }
 }
 
 function lpSetStatus(msg, kind) {
@@ -4243,6 +4267,62 @@ async function lpLoadPrinters() {
     lpSetStatus("Printing to " + b.textContent, "ok");
   }));
   bar.hidden = printers.length < 2;   // only show the toggle when there's a real choice
+}
+
+// ----- On-screen "Manage printers" panel (label screen) — for managers AND
+// employees a manager gave the printer-admin permission (e.g. receiving). Same
+// add/edit/remove as Manage → Label Printer, but reachable without the manager area.
+let lpspEditId = null;
+function lpspMsg(m) { const e = $("lpspMsg"); if (e) e.textContent = m || ""; }
+async function renderLpspPrinters() {
+  const el = $("lpspList");
+  if (!el) return;
+  let list = [];
+  try { const r = await apiCall("getPrinters", { pin: session.pin }); list = (r && r.printers) || []; } catch (_) {}
+  el.innerHTML = list.length
+    ? list.map(p => `<div class="arow"><div class="ainfo"><div class="atitle">${escapeHtml(p.name)}</div><div class="asub">Serial: ${escapeHtml(p.serial || "—")}</div></div><div class="aactions"><button class="ghost" data-lpsped="${p.id}" data-nm="${escapeAttr(p.name)}" data-sr="${escapeAttr(p.serial || "")}">Edit</button><button class="ghost" data-lpsprm="${p.id}">Remove</button></div></div>`).join("")
+    : `<div class="muted" style="font-size:13px;">No printers yet — add one below.</div>`;
+  el.querySelectorAll("[data-lpsped]").forEach(b => b.addEventListener("click", () => lpspEdit(parseInt(b.dataset.lpsped, 10), b.dataset.nm, b.dataset.sr)));
+  el.querySelectorAll("[data-lpsprm]").forEach(b => b.addEventListener("click", () => lpspRemove(parseInt(b.dataset.lpsprm, 10))));
+}
+function lpspEdit(id, name, serial) {
+  lpspEditId = id;
+  $("lpspName").value = name || ""; $("lpspSerial").value = serial || "";
+  $("lpspFormTitle").textContent = "Edit printer";
+  $("lpspAdd").textContent = "Save changes";
+  $("lpspCancel").hidden = false; lpspMsg("");
+  try { $("lpspName").scrollIntoView({ behavior: "smooth", block: "center" }); } catch (_) {}
+}
+function lpspCancel() {
+  lpspEditId = null;
+  $("lpspName").value = ""; $("lpspSerial").value = "";
+  $("lpspFormTitle").textContent = "Add a printer";
+  $("lpspAdd").textContent = "Add printer";
+  $("lpspCancel").hidden = true; lpspMsg("");
+}
+async function lpspSave() {
+  const printer = { name: $("lpspName").value.trim(), serial: $("lpspSerial").value.trim() };
+  if (!printer.name) { lpspMsg("Printer name is required."); return; }
+  if (!printer.serial) { lpspMsg("Serial is required."); return; }
+  let res;
+  try {
+    if (lpspEditId != null) { printer.id = lpspEditId; res = await apiCall("updatePrinter", { pin: session.pin, printer: printer }); }
+    else { res = await apiCall("addPrinter", { pin: session.pin, printer: printer }); }
+  } catch (e) { lpspMsg("Couldn't save — try again."); return; }
+  if (res && res.error) { lpspMsg(res.error); return; }
+  lpspCancel();
+  await renderLpspPrinters();
+  lpLoadPrinters();   // refresh the print-screen printer picker too
+}
+async function lpspRemove(id) {
+  if (!confirm("Remove this printer?")) return;
+  if (lpspEditId === id) lpspCancel();
+  try {
+    const res = await apiCall("removePrinter", { pin: session.pin, id: id });
+    if (res && res.error) { lpspMsg(res.error); return; }
+  } catch (e) { lpspMsg("Couldn't remove — try again."); return; }
+  await renderLpspPrinters();
+  lpLoadPrinters();
 }
 
 // Manager-only cloud-printing settings (Zebra SendFileToPrinter).
@@ -6553,13 +6633,16 @@ function renderEmpAdmin() {
   el.innerHTML = emps.map(e => {
     const clOn = e.checklistEligible !== false;     // default-on if column missing
     const voteOn = e.votingEligible !== false;
+    const prOn = !!e.printerAdmin;                   // default-off
     const badges = (e.active ? "" : `<span class="badge off">Off</span>`)
       + (e.active && !clOn ? `<span class="badge off">No checklist</span>` : "")
-      + (e.active && !voteOn ? `<span class="badge off">No voting</span>` : "");
+      + (e.active && !voteOn ? `<span class="badge off">No voting</span>` : "")
+      + (e.active && prOn ? `<span class="badge">🖨️ Printers</span>` : "");
     // Per-feature toggles only make sense for an active person.
     const featureBtns = e.active ? `
           <button class="ghost" data-cltoggle="${e.id}" data-on="${clOn ? 0 : 1}">${clOn ? "Remove from checklist" : "Add to checklist"}</button>
-          <button class="ghost" data-votetoggle="${e.id}" data-on="${voteOn ? 0 : 1}">${voteOn ? "Remove from voting" : "Add to voting"}</button>` : "";
+          <button class="ghost" data-votetoggle="${e.id}" data-on="${voteOn ? 0 : 1}">${voteOn ? "Remove from voting" : "Add to voting"}</button>
+          <button class="ghost" data-prtoggle="${e.id}" data-on="${prOn ? 0 : 1}" title="Lets this person add/edit/remove label printers on the Label Printer screen — no other manager access.">${prOn ? "Remove printer access" : "Let manage printers"}</button>` : "";
     return `
       <div class="arow ${e.active ? "" : "inactive"}">
         <div class="ainfo">
@@ -6575,6 +6658,7 @@ function renderEmpAdmin() {
   el.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => editEmp(parseInt(b.dataset.edit, 10))));
   el.querySelectorAll("[data-cltoggle]").forEach(b => b.addEventListener("click", () => adminSave("setEmployeeChecklistEligible", { id: parseInt(b.dataset.cltoggle, 10), eligible: b.dataset.on === "1" })));
   el.querySelectorAll("[data-votetoggle]").forEach(b => b.addEventListener("click", () => adminSave("setEmployeeVotingEligible", { id: parseInt(b.dataset.votetoggle, 10), eligible: b.dataset.on === "1" })));
+  el.querySelectorAll("[data-prtoggle]").forEach(b => b.addEventListener("click", () => adminSave("setEmployeePrinterAdmin", { id: parseInt(b.dataset.prtoggle, 10), on: b.dataset.on === "1" })));
   el.querySelectorAll("[data-toggle]").forEach(b => b.addEventListener("click", () => adminSave("setEmployeeActive", { id: parseInt(b.dataset.toggle, 10), active: b.dataset.active === "1" })));
 }
 function showEmpForm(e) {
@@ -6747,6 +6831,8 @@ $("mBroadcastSend").addEventListener("click", sendBroadcastNow);
 $("lblLimitSave").addEventListener("click", saveLabelLimit);
 $("lblPrAdd").addEventListener("click", lpSavePrinter);
 $("lblPrCancel").addEventListener("click", cancelEditPrinter);
+$("lpspAdd").addEventListener("click", lpspSave);
+$("lpspCancel").addEventListener("click", lpspCancel);
 $("lblSrcNow").addEventListener("click", refreshPartsNow);
 
 $("aClose").addEventListener("click", () => { $("award").hidden = true; });

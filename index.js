@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '136';
+const APP_VERSION = '137';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -287,6 +287,9 @@ async function ensureSchema() {
     }
   }
   await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS voting_eligible BOOLEAN NOT NULL DEFAULT true`);
+  // Lets a non-manager employee add/edit/remove label printers (e.g. whoever runs
+  // receiving). Off by default; a manager grants it per person in Manage → People.
+  await pool.query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS printer_admin BOOLEAN NOT NULL DEFAULT false`);
 
   // Cycle-based closing-checklist rotation: a shuffled order of eligible closers
   // for the current cycle, reshuffled once everyone has had a turn. Singleton row.
@@ -796,16 +799,21 @@ async function resolveAuth(body) {
 }
 
 function isManager(who) { return !!(who && who.role === 'manager'); }
+// Managers can always manage printers; a non-manager employee can too if a manager
+// gave them the printer_admin permission (see roleForPin / Manage → People).
+function canManagePrinters(who) { return !!(who && (who.role === 'manager' || who.printerAdmin)); }
 
 async function roleForPin(pin) {
   const p = String(pin == null ? '' : pin).trim();
   if (!p) return null;
   if (managerPinMatches(p)) return { role: 'manager', name: 'Manager' };
   const { rows } = await pool.query(
-    'SELECT name FROM employees WHERE pin = $1 AND active = true LIMIT 1',
+    'SELECT id, name, printer_admin FROM employees WHERE pin = $1 AND active = true LIMIT 1',
     [p]
   );
-  return rows.length ? { role: 'employee', name: rows[0].name } : null;
+  return rows.length
+    ? { role: 'employee', name: rows[0].name, empId: rows[0].id, printerAdmin: !!rows[0].printer_admin }
+    : null;
 }
 
 async function balanceFor(name) {
@@ -1551,7 +1559,8 @@ async function getAdmin(who) {
       SELECT e.id, e.name, e.pin, e.email,
              e.starting_balance AS "startingBalance", e.active,
              e.checklist_eligible AS "checklistEligible",
-             e.voting_eligible AS "votingEligible", b.balance
+             e.voting_eligible AS "votingEligible",
+             e.printer_admin AS "printerAdmin", b.balance
         FROM employees e JOIN balances b ON b.id = e.id
        ORDER BY e.active DESC, e.name`),
     pool.query(`
@@ -1768,6 +1777,16 @@ async function setEmployeeVotingEligible(who, id, eligible) {
   const eid = cleanInt(id);
   if (eid === null) return { error: 'Bad employee id' };
   await pool.query(`UPDATE employees SET voting_eligible=$1 WHERE id=$2`, [!!eligible, eid]);
+  return { ok: true };
+}
+
+// Let a non-manager employee add/edit/remove label printers (e.g. whoever runs
+// receiving), without giving them any other manager powers. Manager only to set.
+async function setEmployeePrinterAdmin(who, id, on) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const eid = cleanInt(id);
+  if (eid === null) return { error: 'Bad employee id' };
+  await pool.query(`UPDATE employees SET printer_admin=$1 WHERE id=$2`, [!!on, eid]);
   return { ok: true };
 }
 
@@ -2542,6 +2561,8 @@ async function getPrintStatus(who) {
   const out = { bridgeOnline: await bridgeOnline(), pending: rows[0].pending, cloudEnabled: cloudConfigured(cfg) };
   // Only a manager may see the bridge token (to paste into the warehouse PC script).
   if (isManager(who)) out.bridgeToken = await currentBridgeToken();
+  // Managers + printer-admins get the on-screen "Manage printers" panel.
+  out.canManagePrinters = canManagePrinters(who);
   return out;
 }
 
@@ -2892,7 +2913,7 @@ async function listPrinters() {
 }
 async function getPrinters(who) {
   if (!who) return { error: 'Please sign in.' };
-  const mgr = isManager(who);
+  const mgr = canManagePrinters(who);   // managers + printer-admins see/edit serials
   const rows = await listPrinters();
   return { printers: rows.map(p => mgr ? { id: p.id, name: p.name, serial: p.serial } : { id: p.id, name: p.name }) };
 }
@@ -2910,7 +2931,7 @@ async function resolvePrinterSerial(printerId) {
   return cfg.serial || '';
 }
 async function addPrinter(who, p) {
-  if (!isManager(who)) return { error: 'Manager only' };
+  if (!canManagePrinters(who)) return { error: 'Not allowed' };
   p = p || {};
   const name = String(p.name || '').trim().slice(0, 60);
   const serial = String(p.serial || '').trim().slice(0, 120);
@@ -2921,7 +2942,7 @@ async function addPrinter(who, p) {
   return { ok: true };
 }
 async function updatePrinter(who, p) {
-  if (!isManager(who)) return { error: 'Manager only' };
+  if (!canManagePrinters(who)) return { error: 'Not allowed' };
   p = p || {};
   const id = cleanInt(p.id);
   const name = String(p.name || '').trim().slice(0, 60);
@@ -2933,7 +2954,7 @@ async function updatePrinter(who, p) {
   return { ok: true };
 }
 async function removePrinter(who, id) {
-  if (!isManager(who)) return { error: 'Manager only' };
+  if (!canManagePrinters(who)) return { error: 'Not allowed' };
   const pid = cleanInt(id);
   if (pid === null) return { error: 'Bad printer id' };
   await pool.query('DELETE FROM printers WHERE id = $1', [pid]);
@@ -3959,6 +3980,7 @@ app.post('/', async (req, res) => {
         case 'updateEmployee':    out = await updateEmployee(who, body.employee); break;
         case 'setEmployeeActive': out = await setEmployeeActive(who, body.id, body.active); break;
         case 'setEmployeeChecklistEligible': out = await setEmployeeChecklistEligible(who, body.id, body.eligible); break;
+        case 'setEmployeePrinterAdmin': out = await setEmployeePrinterAdmin(who, body.id, body.on); break;
         case 'setEmployeeVotingEligible':    out = await setEmployeeVotingEligible(who, body.id, body.eligible); break;
         case 'listAdmins':        out = await listAdmins(who); break;
         case 'addAdmin':          out = await addAdmin(who, body.admin); break;
