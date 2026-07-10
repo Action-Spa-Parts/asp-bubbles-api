@@ -714,6 +714,16 @@ function cleanInt(v) {
   return parseInt(s, 10);
 }
 
+// Validate a bubble award amount. Must be a whole number in a sane range — this
+// rejects NaN/Infinity, decimals, and values that would overflow Postgres int4
+// (which would otherwise throw mid-insert). Returns the integer, or null if bad.
+const MAX_AWARD = 1000000;
+function validAmount(v) {
+  if (typeof v !== 'number' || !Number.isInteger(v)) return null;
+  if (v < -MAX_AWARD || v > MAX_AWARD) return null;
+  return v;
+}
+
 // Validate a 4–6 digit PIN string. Returns the clean string or null.
 function cleanPin(v) {
   const p = String(v == null ? '' : v).trim();
@@ -1083,7 +1093,9 @@ async function getPublic() {
 
 async function awardBubbles(who, name, metric, amount) {
   if (!isManager(who)) return { error: 'Invalid manager PIN' };
-  if (!name || typeof amount !== 'number') return { error: 'Missing name or amount' };
+  if (!name) return { error: 'Missing name' };
+  amount = validAmount(amount);
+  if (amount === null) return { error: 'Enter a whole number of bubbles (up to 1,000,000).' };
 
   const { rows } = await pool.query('SELECT id FROM employees WHERE name = $1', [name]);
   if (!rows.length) return { error: 'Unknown employee: ' + name };
@@ -1112,7 +1124,8 @@ async function awardBubbles(who, name, metric, amount) {
 
 async function awardTeam(who, metric, amount) {
   if (!isManager(who)) return { error: 'Invalid manager PIN' };
-  if (typeof amount !== 'number') return { error: 'Missing amount' };
+  amount = validAmount(amount);
+  if (amount === null) return { error: 'Enter a whole number of bubbles (up to 1,000,000).' };
 
   // One INSERT writes a row per active employee.
   const ins = await pool.query(
@@ -1149,7 +1162,9 @@ async function awardTeam(who, metric, amount) {
 
 async function reverseAward(who, name, metric, amount) {
   if (!isManager(who)) return { error: 'Invalid manager PIN' };
-  if (!name || typeof amount !== 'number') return { error: 'Missing name or amount' };
+  if (!name) return { error: 'Missing name' };
+  amount = validAmount(amount);
+  if (amount === null) return { error: 'Enter a whole number of bubbles (up to 1,000,000).' };
 
   const client = await pool.connect();
   try {
