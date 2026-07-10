@@ -31,7 +31,7 @@ const GMAIL_USER = process.env.GMAIL_USER || '';
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
 // Front-end version. Bump on every front-end change (together with sw.js CACHE)
 // so open apps detect the new version and show the "Update" banner.
-const APP_VERSION = '135';
+const APP_VERSION = '136';
 const PORT          = process.env.PORT || 3000;
 
 if (!DATABASE_URL) {
@@ -128,6 +128,9 @@ async function ensureSchema() {
   // When a manager applies the "not started by the deadline" penalty, we stamp
   // this so the flag can't be penalized twice.
   await pool.query(`ALTER TABLE checklist_runs ADD COLUMN IF NOT EXISTS late_penalized_at TIMESTAMPTZ`);
+  // When a manager dismisses the "not completed" next-morning alert without a
+  // penalty, we stamp this so the alert stops showing for that day.
+  await pool.query(`ALTER TABLE checklist_runs ADD COLUMN IF NOT EXISTS missed_ack_at TIMESTAMPTZ`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS checklist_items (
       id         SERIAL PRIMARY KEY,
@@ -982,6 +985,26 @@ async function getData(who) {
           ORDER BY r.run_date DESC, ci.sort_order LIMIT 50`)).rows
     : [];
 
+  // Closing days (in the past 30 days) whose checklist was never completed — the
+  // next-morning "not completed" alert. Hidden once the manager penalizes the run
+  // (late_penalized_at, shared with the late-start penalty so it can't double-hit)
+  // or dismisses it (missed_ack_at). Only real assigned closing runs count.
+  const checklistMissed = isManager
+    ? (await pool.query(
+        `SELECT r.id AS "runId", to_char(r.run_date, 'YYYY-MM-DD') AS "Date", e.name AS "Assignee",
+                (SELECT COUNT(*) FILTER (WHERE ci.checked)::int
+                   FROM checklist_items ci WHERE ci.run_id = r.id) AS "Checked",
+                (SELECT COUNT(*)::int FROM checklist_items ci WHERE ci.run_id = r.id) AS "Total"
+           FROM checklist_runs r
+           JOIN employees e ON e.id = r.employee_id
+          WHERE r.run_date < ${BIZ_DATE}
+            AND r.run_date >= ${BIZ_DATE} - INTERVAL '30 days'
+            AND r.status <> 'completed'
+            AND r.late_penalized_at IS NULL
+            AND r.missed_ack_at IS NULL
+          ORDER BY r.run_date DESC LIMIT 30`)).rows
+    : [];
+
   return {
     role: who.role,
     name: who.name,
@@ -995,6 +1018,7 @@ async function getData(who) {
     meetingPending,
     meetingCreditAmount,
     checklistFlags,
+    checklistMissed,
     allAwards: allAwards.rows,
     checklist,
     checklistPenalty: latePenalty(),
@@ -2152,6 +2176,40 @@ async function penalizeLateChecklist(who, runId) {
      VALUES ($1, 'Late closing checklist', $2, $3, $4)`,
     [rows[0].employee_id, -amt, who.name, 'Not started by ' + deadlineLabel()]);
   await pool.query('UPDATE checklist_runs SET late_penalized_at = now() WHERE id = $1', [id]);
+  return { ok: true };
+}
+
+// Manager penalizes the assigned closer for a checklist that was never completed
+// (from the next-morning "not completed" alert). Deducts the same late penalty and
+// stamps late_penalized_at — shared with the late-start penalty so a single run is
+// never penalized twice, and it clears from the alert. Undoable in Activity.
+async function penalizeMissedChecklist(who, runId) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const id = cleanInt(runId);
+  if (id === null) return { error: 'Bad run id' };
+  const { rows } = await pool.query(
+    `SELECT r.id, r.employee_id, r.status, r.late_penalized_at, e.name AS name
+       FROM checklist_runs r LEFT JOIN employees e ON e.id = r.employee_id WHERE r.id = $1`, [id]);
+  if (!rows.length) return { error: 'Run not found' };
+  if (rows[0].status === 'completed') return { error: 'That checklist was completed' };
+  if (rows[0].late_penalized_at) return { error: 'Already penalized' };
+  if (!rows[0].employee_id) return { error: 'No one is assigned to that run' };
+  const amt = latePenalty();
+  await pool.query(
+    `INSERT INTO awards (employee_id, metric, amount, awarded_by, note)
+     VALUES ($1, 'Closing checklist not completed', $2, $3, $4)`,
+    [rows[0].employee_id, -amt, who.name, 'Not completed']);
+  await pool.query('UPDATE checklist_runs SET late_penalized_at = now() WHERE id = $1', [id]);
+  return { ok: true };
+}
+
+// Manager dismisses the "not completed" alert without a penalty (just acknowledges).
+async function dismissMissedChecklist(who, runId) {
+  if (!isManager(who)) return { error: 'Manager only' };
+  const id = cleanInt(runId);
+  if (id === null) return { error: 'Bad run id' };
+  await pool.query(
+    `UPDATE checklist_runs SET missed_ack_at = now() WHERE id = $1 AND status <> 'completed'`, [id]);
   return { ok: true };
 }
 
@@ -3925,6 +3983,8 @@ app.post('/', async (req, res) => {
         case 'reassignChecklistRun': out = await reassignChecklistRun(who, body); break;
         case 'deleteChecklistRun':   out = await deleteChecklistRun(who, body.runId); break;
         case 'penalizeLateChecklist': out = await penalizeLateChecklist(who, body.runId); break;
+        case 'penalizeMissedChecklist': out = await penalizeMissedChecklist(who, body.runId); break;
+        case 'dismissMissedChecklist': out = await dismissMissedChecklist(who, body.runId); break;
         case 'resolveChecklistFlag': out = await resolveChecklistFlag(who, body.itemId, body.approve); break;
         // ----- Box Counter -----
         case 'getBoxSizes':   out = await getBoxSizes(who); break;

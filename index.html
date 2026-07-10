@@ -1234,6 +1234,10 @@
       <h2 class="section">Checklist flags to review</h2>
       <div id="clFlagsList"></div>
     </div>
+    <div id="clMissedSection" hidden>
+      <h2 class="section">Closing checklist not completed</h2>
+      <div id="clMissedList"></div>
+    </div>
     <div id="fulfillSection" hidden>
       <h2 class="section">Ready to hand out</h2>
       <div id="fulfillList"></div>
@@ -2370,6 +2374,7 @@ const state = {
   approved: [],     // manager: approved, awaiting hand-out
   meetingPending: [], // manager: pending morning-meeting credits
   checklistFlags: [], // manager: open checklist flags to review
+  checklistMissed: [], // manager: past closing days never completed (next-morning alert)
   settings: null,   // manager: editable settings (Settings tab)
   tiles: {},        // which launcher tiles are enabled
   search: "",
@@ -2669,6 +2674,36 @@ function renderRewards() {
     flagSec.hidden = true;
   }
 
+  // --- Manager: closing checklists that were never completed (next-morning alert) ---
+  const missSec = $("clMissedSection");
+  if (isManager && (state.checklistMissed || []).length) {
+    missSec.hidden = false;
+    const pen = state.checklistPenalty != null ? state.checklistPenalty : 10;
+    $("clMissedList").innerHTML = state.checklistMissed.map(m => {
+      const progress = (m.Checked > 0) ? `started — ${m.Checked}/${m.Total} done, never submitted` : "never started";
+      return `
+      <div class="req-row">
+        <div>
+          <span style="color:var(--danger);">⚠</span> <strong>Not completed</strong>
+          <div class="muted" style="font-size:12.5px;">${escapeHtml(m.Date || "")}${m.Assignee ? " · " + escapeHtml(m.Assignee) : ""} — ${progress}</div>
+        </div>
+        <div class="req-actions">
+          <button class="deny" data-misspen="${m.runId}" data-name="${escapeAttr(m.Assignee || "")}">Deduct ${pen}</button>
+          <button class="ghost" data-missdismiss="${m.runId}">Dismiss</button>
+          <button class="ghost" data-openrun="${m.runId}">Open in checklist</button>
+        </div>
+      </div>`;
+    }).join("");
+    $("clMissedList").querySelectorAll("[data-misspen]").forEach(b =>
+      b.addEventListener("click", () => penalizeMissed(parseInt(b.dataset.misspen, 10), b.dataset.name)));
+    $("clMissedList").querySelectorAll("[data-missdismiss]").forEach(b =>
+      b.addEventListener("click", () => dismissMissed(parseInt(b.dataset.missdismiss, 10))));
+    $("clMissedList").querySelectorAll("[data-openrun]").forEach(b =>
+      b.addEventListener("click", () => { state.expandRun = parseInt(b.dataset.openrun, 10); state.checklistFilter = { name: "", date: "" }; showScreen("checklist"); }));
+  } else {
+    missSec.hidden = true;
+  }
+
   // --- Manager: approved, ready to hand out ---
   const fulSec = $("fulfillSection");
   if (isManager && state.approved.length) {
@@ -2811,6 +2846,35 @@ async function resolveFlagReq(itemId, approve, name) {
   } catch (err) {
     setStatus("Error: " + (err && err.message ? err.message : err), "error");
   }
+}
+
+// Manager: deduct the late penalty from the closer for a checklist that was never
+// completed (from the "Closing checklist not completed" alert). Confirms first;
+// undoable in Activity like the other penalties.
+async function penalizeMissed(runId, name) {
+  const amt = state.checklistPenalty != null ? state.checklistPenalty : 10;
+  askConfirm(
+    `Deduct ${amt} bubbles from ${name || "the closer"} for not completing the closing checklist? You can undo it later in Activity.`,
+    async () => {
+      try {
+        const res = await apiCall("penalizeMissedChecklist", { pin: session.pin, runId: runId });
+        if (res && res.error) setStatus(res.error, "error");
+        else setStatus("Penalty applied — bubbles deducted.", "ok");
+        fetchData();
+      } catch (err) { setStatus("Error: " + (err && err.message ? err.message : err), "error"); }
+    },
+    { okText: "Deduct" }
+  );
+}
+
+// Manager: acknowledge a not-completed checklist without penalizing (clears it).
+async function dismissMissed(runId) {
+  try {
+    const res = await apiCall("dismissMissedChecklist", { pin: session.pin, runId: runId });
+    if (res && res.error) setStatus(res.error, "error");
+    else setStatus("Dismissed.", "ok");
+    fetchData();
+  } catch (err) { setStatus("Error: " + (err && err.message ? err.message : err), "error"); }
 }
 
 async function fulfillRequest(row) {
@@ -3079,7 +3143,7 @@ function updateBubblesNav() {
   const isMgr = session.role === "manager";
   const psTab = $("navPickShip");
   if (psTab) psTab.hidden = !isMgr;   // Picks & Ships is manager-only
-  const n = isMgr ? ((state.pending || []).length + (state.meetingPending || []).length + (state.approved || []).length + (state.checklistFlags || []).length) : 0;
+  const n = isMgr ? ((state.pending || []).length + (state.meetingPending || []).length + (state.approved || []).length + (state.checklistFlags || []).length + (state.checklistMissed || []).length) : 0;
   const need = n > 0;
   const tile = $("tileBubbles");
   if (tile) tile.classList.toggle("alert", need);
@@ -3263,6 +3327,7 @@ const HOWTO_APPS = [
       "<b>Whose turn it is</b> — the app rotates through everyone eligible <b>alphabetically</b>, then restarts A→Z once everyone's had a turn. Today's closer shows at the top of the review and on the sign-in screen.",
       "<b>Someone's out?</b> Use the <b>“Doing it:”</b> dropdown on today's run to hand it to anyone active, or tap <b>🔄 Restart order from the top</b> to re-line-up A→Z.",
       "<b>Started late?</b> If the closer didn't tap Start by the deadline (set in Settings), the run is flagged late — you then tap <b>Apply penalty</b> to deduct bubbles. Nothing is deducted automatically.",
+      "<b>Never completed?</b> The next morning, any closing day that wasn't finished shows a <b>“Closing checklist not completed”</b> alert in <b>Bubbles → Rewards</b> (it counts toward the red notification badge). Tap <b>Deduct</b> to take the penalty off the assigned closer, or <b>Dismiss</b> to clear it with no penalty.",
       "<b>Something ticked that wasn't done?</b> Turn on <b>Check mode</b>, tap <b>Flag</b> on that task with a note, then approve the flag in <b>Bubbles → Rewards</b> to apply the penalty.",
       "Expand any past day to see who closed, the <b>start/submit times</b>, and time per task. You can also delete an old run that was never completed.",
     ] },
@@ -5795,6 +5860,7 @@ function applyData(data) {
   state.approved   = data.approved || [];
   state.meetingPending = data.meetingPending || [];
   state.checklistFlags = data.checklistFlags || [];
+  state.checklistMissed = data.checklistMissed || [];
   state.checklistPenalty = data.checklistPenalty;
   state.meetingCreditAmount = data.meetingCreditAmount;
   state.lateFlagOn = data.lateFlagOn;
